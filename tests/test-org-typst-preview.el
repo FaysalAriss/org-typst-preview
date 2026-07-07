@@ -1,0 +1,118 @@
+;;; test-org-typst-preview.el --- batch tests for org-typst-preview.el -*- lexical-binding: t; -*-
+
+(require 'cl-lib)
+;; isolate the image cache in a throwaway directory
+(setq user-emacs-directory (file-name-as-directory (make-temp-file "org-typst-preview-test" t)))
+(load (expand-file-name "../org-typst-preview.el" (file-name-directory load-file-name)))
+(require 'org)
+
+(defvar test-failures 0)
+(defun check (name got expected)
+  (if (equal got expected)
+      (message "PASS  %s" name)
+    (setq test-failures (1+ test-failures))
+    (message "FAIL  %s\n  got:      %S\n  expected: %S" name got expected)))
+
+;; --- 1. fragment scanning -------------------------------------------------
+(with-temp-buffer
+  (org-mode)
+  (insert "Pythagoras says $x^2 + y^2 = z^2$ in every triangle.\n"
+          "I paid $5, then some more later.\n"
+          "Escaped: \\$not math\\$ stays text.\n"
+          "Display: $$sum_(k=1)^n k = (n(n+1))/2$$ done.\n"
+          "Two on a line: $alpha$ and $beta/2$.\n"
+          "#+begin_src python\nx = \"$never$\"\n#+end_src\n"
+          "Edge: $$x$$ and $y$\n")
+  (let ((frags (org-typst-preview--fragments)))
+    (check "fragment math strings"
+           (mapcar (lambda (f) (nth 3 f)) frags)
+           '("x^2 + y^2 = z^2"
+             "sum_(k=1)^n k = (n(n+1))/2"
+             "alpha" "beta/2"
+             "x" "y"))
+    (check "display flags"
+           (mapcar (lambda (f) (nth 2 f)) frags)
+           '(nil t nil nil t nil))
+    ;; positions line up with the actual text
+    (check "fragment text round-trip"
+           (mapcar (lambda (f)
+                     (buffer-substring-no-properties (nth 0 f) (nth 1 f)))
+                   frags)
+           '("$x^2 + y^2 = z^2$"
+             "$$sum_(k=1)^n k = (n(n+1))/2$$"
+             "$alpha$" "$beta/2$"
+             "$$x$$" "$y$"))))
+
+;; --- 2. typst source generation -------------------------------------------
+(check "inline source"
+       (org-typst-preview--source "x^2" nil 12 "#ffffff")
+       "#set page(width: auto, height: auto, margin: 1.5pt, fill: none)\n#set text(size: 12pt, fill: rgb(\"#ffffff\"), top-edge: \"bounds\", bottom-edge: \"bounds\")\n$x^2$")
+(check "display source uses spaced dollars"
+       (string-suffix-p "$ x^2 $"
+                        (org-typst-preview--source "x^2" t 12 "#ffffff"))
+       t)
+
+;; --- 3. real compilation through the async path ---------------------------
+(make-directory org-typst-preview-cache-dir t)
+(let* ((results nil)
+       (cases `(("good-inline"  ,(org-typst-preview--source
+                                  "integral_0^1 x^2 dif x = 1/3" nil 11.25 "#bbc2cf"))
+                ("good-display" ,(org-typst-preview--source
+                                  "sum_(k=1)^n k = (n(n+1))/2" t 11.25 "#bbc2cf"))
+                ("bad-syntax"   ,(org-typst-preview--source
+                                  "x^{unclosed" nil 11.25 "#bbc2cf")))))
+  (dolist (c cases)
+    (let* ((name (car c))
+           (source (cadr c))
+           (file (expand-file-name (concat (sha1 source) ".svg")
+                                   org-typst-preview-cache-dir)))
+      (org-typst-preview--compile-async
+       source 'svg file
+       (lambda (ok) (push (cons name ok) results)))))
+  (let ((deadline (+ (float-time) 30)))
+    (while (and (< (length results) 3) (< (float-time) deadline))
+      (accept-process-output nil 0.1)))
+  (check "compile results"
+         (sort (mapcar (lambda (r) (format "%s=%s" (car r) (cdr r))) results)
+               #'string<)
+         '("bad-syntax=nil" "good-display=t" "good-inline=t"))
+  ;; the good SVGs exist and contain drawing paths
+  (let ((svgs (directory-files org-typst-preview-cache-dir t "\\.svg\\'")))
+    (check "svg count" (length svgs) 2)
+    (check "svgs non-trivial"
+           (cl-every (lambda (f)
+                       (with-temp-buffer
+                         (insert-file-contents f)
+                         (and (> (buffer-size) 500)
+                              (search-forward "<svg" nil t))))
+                     svgs)
+           t)
+    ;; no leftover .typ files after compilation
+    (check "typ files cleaned up"
+           (directory-files org-typst-preview-cache-dir nil "\\.typ\\'")
+           nil))
+  ;; error was logged for the bad fragment
+  (check "error logged"
+         (and (get-buffer "*typst-preview-errors*")
+              (with-current-buffer "*typst-preview-errors*"
+                (> (buffer-size) 0)))
+         t))
+
+;; --- 4. cursor-position logic used by the scanner --------------------------
+(with-temp-buffer
+  (org-mode)
+  (insert "before $x^2$ after")
+  ;; the scan skips a fragment when point is within [start, end]
+  (let* ((frag (car (org-typst-preview--fragments)))
+         (start (nth 0 frag)) (end (nth 1 frag)))
+    (goto-char (1+ start))
+    (check "point inside -> skipped"
+           (and (<= start (point)) (<= (point) end)) t)
+    (goto-char (1+ end))
+    (check "point after -> rendered"
+           (and (<= start (point)) (<= (point) end)) nil)))
+
+(if (> test-failures 0)
+    (kill-emacs 1)
+  (message "\nAll tests passed."))
+;;; test-org-typst-preview.el ends here
