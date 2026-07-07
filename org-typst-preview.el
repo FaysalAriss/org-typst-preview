@@ -3,7 +3,7 @@
 ;; Copyright (C) 2026 Faysal Ariss
 
 ;; Author: Faysal Ariss <faysal.ariss@gmail.com>
-;; Version: 0.2.0
+;; Version: 0.4.0
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: outlines, tex, wp
 ;; URL: https://github.com/faysalariss/org-typst-preview
@@ -126,17 +126,74 @@ is the right pt value to hand Typst."
                 (ash (nth 0 vals) -8) (ash (nth 1 vals) -8) (ash (nth 2 vals) -8))
       "#000000")))
 
-(defun org-typst-preview--source (math displayp size-pt color)
+(defun org-typst-preview--source (math displayp size-pt color &optional wrap-w)
   "Build the Typst document that renders MATH at SIZE-PT in COLOR.
-When DISPLAYP is non-nil, use display-style math."
+When DISPLAYP is non-nil, use display-style math.  When WRAP-W is
+non-nil, fix the page width to WRAP-W pt so Typst line-wraps long
+inline math instead of producing one wide line.
+
+The document has TWO pages: page 1 is the image shown in the buffer;
+page 2 renders the same math with the text box ending at the baseline
+instead of the ink bounds, so its height reveals where the baseline
+sits -- used to align the image with the surrounding text's baseline
+\(the same idea as dvipng's depth output in org-latex-preview)."
   ;; fill: none = transparent background, so it sits on the theme's bg.
   ;; top/bottom-edge "bounds" makes the auto-sized page measure the real
   ;; ink extents; the default (cap-height..baseline) crops descenders
   ;; like the tail of y and anything raised above cap height (exponents).
-  (concat "#set page(width: auto, height: auto, margin: 1.5pt, fill: none)\n"
-          (format "#set text(size: %spt, fill: rgb(\"%s\"), top-edge: \"bounds\", bottom-edge: \"bounds\")\n"
-                  size-pt color)
-          (if displayp (format "$ %s $" math) (format "$%s$" math))))
+  (let ((body (if displayp (format "$ %s $" math) (format "$%s$" math))))
+    (concat (if wrap-w
+                (format "#set page(width: %dpt, height: auto, margin: 1.5pt, fill: none)\n"
+                        wrap-w)
+              "#set page(width: auto, height: auto, margin: 1.5pt, fill: none)\n")
+            (format "#set text(size: %spt, fill: rgb(\"%s\"), top-edge: \"bounds\", bottom-edge: \"bounds\")\n"
+                    size-pt color)
+            body
+            "\n#pagebreak()\n#set text(bottom-edge: \"baseline\")\n"
+            body)))
+
+(defun org-typst-preview--target (math displayp size color wrap-w)
+  "Return (SOURCE HASH IMG-FILE) for rendering MATH.
+DISPLAYP, SIZE, COLOR and WRAP-W as in `org-typst-preview--source'."
+  (let* ((source (org-typst-preview--source math displayp size color wrap-w))
+         (hash (sha1 source)))
+    ;; -1 = the displayed image (page 1); its sibling -2 holds the
+    ;; baseline-measurement page, see `org-typst-preview--source'.
+    (list source hash
+          (expand-file-name
+           (format "%s-1.%s" hash (org-typst-preview--image-format))
+           org-typst-preview-cache-dir))))
+
+(defun org-typst-preview--ascent (img-file)
+  "Baseline ascent percentage for IMG-FILE, or nil to center instead.
+Compares the full-ink height (page 1) with the height down to the
+baseline (page 2); the ratio tells Emacs what fraction of the image
+belongs above the text baseline.  The 3pt of page margins cancel out."
+  (when (string-suffix-p "-1.svg" img-file)
+    (let* ((d1 (org-typst-preview--image-dims img-file))
+           (d2 (org-typst-preview--image-dims
+                (concat (substring img-file 0 -6) "-2.svg"))))
+      (when (and d1 d2 (> (cdr d1) 3.0))
+        (min 100 (max 10 (round (* 100 (/ (- (cdr d2) 3.0)
+                                          (- (cdr d1) 3.0))))))))))
+
+(defvar org-typst-preview--dims-cache (make-hash-table :test #'equal)
+  "Maps SVG file names to their (WIDTH . HEIGHT) in pt.")
+
+(defun org-typst-preview--image-dims (img-file)
+  "Natural (WIDTH . HEIGHT) of the SVG in IMG-FILE in pt, or nil."
+  (or (gethash img-file org-typst-preview--dims-cache)
+      (and (string-suffix-p ".svg" img-file)
+           (file-exists-p img-file)
+           (with-temp-buffer
+             (insert-file-contents img-file nil 0 400)
+             (goto-char (point-min))
+             (when (re-search-forward
+                    "viewBox=\"0 0 \\([0-9.]+\\) \\([0-9.]+\\)\"" nil t)
+               (puthash img-file
+                        (cons (string-to-number (match-string 1))
+                              (string-to-number (match-string 2)))
+                        org-typst-preview--dims-cache))))))
 
 (defun org-typst-preview--protected-p (pos)
   "Non-nil if POS is somewhere math should not render (code blocks etc.)."
@@ -184,16 +241,31 @@ churn out a new image spec per pixel."
         (setq w (if w (min w tw) tw))))
     (and w (max 10 (* 25 (floor w 25))))))
 
+(defvar text-scale-mode)                ; face-remap.el
+(defvar text-scale-mode-step)
+(defvar text-scale-mode-amount)
+
+(defun org-typst-preview--text-scale ()
+  "Current `text-scale-adjust' factor of this buffer, 1.0 when unscaled.
+Previews follow \\[text-scale-adjust] zooming like the text does."
+  (if (and (boundp 'text-scale-mode) text-scale-mode
+           (boundp 'text-scale-mode-amount))
+      (expt text-scale-mode-step text-scale-mode-amount)
+    1.0))
+
 (defun org-typst-preview--image (img-file max-width)
-  "Image spec for IMG-FILE, no wider than MAX-WIDTH pixels if non-nil."
+  "Image spec for IMG-FILE, no wider than MAX-WIDTH pixels if non-nil.
+The image sits on the text baseline when the measurement page is
+available, and scales with the buffer's text scale."
   (let ((fmt (org-typst-preview--image-format)))
     (apply #'create-image img-file fmt nil
-           :ascent 'center
+           :ascent (or (org-typst-preview--ascent img-file) 'center)
            ;; PNGs are rendered at 192ppi (2.667px per pt); 72/192 shrinks
            ;; them back to 1px per pt, the same on-screen size as the SVGs.
-           :scale (if (eq fmt 'png)
-                      (* 0.375 org-typst-preview-scale)
-                    org-typst-preview-scale)
+           :scale (* (if (eq fmt 'png)
+                         (* 0.375 org-typst-preview-scale)
+                       org-typst-preview-scale)
+                     (org-typst-preview--text-scale))
            (when max-width (list :max-width max-width)))))
 
 (defun org-typst-preview--overlay (start end img-file hash)
@@ -229,65 +301,156 @@ always handle -- see `org-typst-preview--max-width'."
                 (overlay-put ov 'display
                              (org-typst-preview--image
                               (overlay-get ov 'org-typst-preview-file)
-                              mw))))))))))
+                              mw)))))
+          ;; and re-flow wrapped math to the new width once resizing pauses
+          (org-typst-preview--schedule))))))
 
-(defun org-typst-preview--existing-p (start end hash)
-  "Non-nil if a preview with HASH already covers exactly START..END.
-Stale previews found in the region are deleted."
-  (let (found)
+(defun org-typst-preview--existing-with-hash (start end hash)
+  "Non-nil if a preview with HASH already covers exactly START..END."
+  (catch 'yes
     (dolist (ov (overlays-in start end))
-      (when (overlay-get ov 'org-typst-preview)
-        (if (and (= (overlay-start ov) start)
+      (when (and (overlay-get ov 'org-typst-preview)
+                 (= (overlay-start ov) start)
                  (= (overlay-end ov) end)
                  (equal (overlay-get ov 'org-typst-preview-hash) hash))
-            (setq found t)
-          (delete-overlay ov))))
-    found))
+        (throw 'yes t)))))
+
+(defun org-typst-preview--place (start end img-file hash)
+  "Replace any previews covering START..END with the image in IMG-FILE.
+HASH tags the new overlay for later staleness checks."
+  (dolist (ov (overlays-in start end))
+    (when (overlay-get ov 'org-typst-preview)
+      (delete-overlay ov)))
+  (org-typst-preview--overlay start end img-file hash))
+
+(defcustom org-typst-preview-max-processes 4
+  "How many typst compiles may run at once; the rest wait in a queue.
+Keeps a math-heavy file from forking one process per fragment when it
+is first opened."
+  :type 'natnum)
+
+(defvar org-typst-preview--queue nil
+  "Compile jobs waiting for a free process slot, oldest first.")
+
+(defvar org-typst-preview--running 0
+  "Number of typst processes currently running.")
 
 (defun org-typst-preview--compile-async (source fmt img-file callback)
-  "Compile SOURCE to IMG-FILE as FMT, then call CALLBACK with success flag."
+  "Compile SOURCE to IMG-FILE as FMT, then call CALLBACK with success flag.
+Jobs beyond `org-typst-preview-max-processes' are queued."
   (unless (gethash img-file org-typst-preview--inflight)
     (puthash img-file t org-typst-preview--inflight)
-    (let ((typ-file (concat img-file ".typ")))
-      (write-region source nil typ-file nil 'silent)
-      (make-process
-       :name "org-typst-preview"
-       :noquery t
-       :buffer (generate-new-buffer " *org-typst-preview*")
-       :command `(,org-typst-preview-program "compile"
-                  "--format" ,(symbol-name fmt)
-                  ,@(when (eq fmt 'png) '("--ppi" "192"))
-                  ,typ-file ,img-file)
-       :sentinel
-       (lambda (proc _event)
-         (when (memq (process-status proc) '(exit signal))
-           (remhash img-file org-typst-preview--inflight)
-           (let ((ok (and (eq (process-status proc) 'exit)
-                          (zerop (process-exit-status proc))
-                          (file-exists-p img-file))))
-             (unless ok
-               (puthash img-file t org-typst-preview--failed)
-               (with-current-buffer
-                   (get-buffer-create "*org-typst-preview-errors*")
-                 (goto-char (point-max))
-                 (insert (format "--- %s ---\n%s\n"
-                                 (format-time-string "%T") source))
-                 (insert-buffer-substring (process-buffer proc))
-                 (insert "\n")))
-             (ignore-errors (delete-file typ-file))
-             (kill-buffer (process-buffer proc))
-             (funcall callback ok))))))))
+    (setq org-typst-preview--queue
+          (nconc org-typst-preview--queue
+                 (list (list source fmt img-file callback))))
+    (org-typst-preview--pump)))
 
-(defun org-typst-preview--compile-then-place (source fmt img-file hash start end)
-  "Compile SOURCE to IMG-FILE as FMT; overlay START..END tagged HASH.
-The overlay is only placed if the fragment text is still unchanged when
-the compile finishes."
-  (let ((buf (current-buffer))
-        (m-start (copy-marker start))
+(defun org-typst-preview--pump ()
+  "Start queued compile jobs while process slots are free."
+  (while (and org-typst-preview--queue
+              (< org-typst-preview--running org-typst-preview-max-processes))
+    (setq org-typst-preview--running (1+ org-typst-preview--running))
+    (apply #'org-typst-preview--start-compile
+           (pop org-typst-preview--queue))))
+
+(defun org-typst-preview--start-compile (source fmt img-file callback)
+  "Run typst on SOURCE producing IMG-FILE as FMT, then call CALLBACK.
+The output name is turned into a {p} pattern because every render has
+a second, baseline-measurement page (see `org-typst-preview--source')."
+  (let ((typ-file (concat img-file ".typ"))
+        (out-pattern (replace-regexp-in-string
+                      "-1\\.\\([a-z]+\\)\\'" "-{p}.\\1" img-file)))
+    (write-region source nil typ-file nil 'silent)
+    (make-process
+     :name "org-typst-preview"
+     :noquery t
+     :buffer (generate-new-buffer " *org-typst-preview*")
+     :command `(,org-typst-preview-program "compile"
+                "--format" ,(symbol-name fmt)
+                ,@(when (eq fmt 'png) '("--ppi" "192"))
+                ,typ-file ,out-pattern)
+     :sentinel
+     (lambda (proc _event)
+       (when (memq (process-status proc) '(exit signal))
+         (setq org-typst-preview--running
+               (max 0 (1- org-typst-preview--running)))
+         (remhash img-file org-typst-preview--inflight)
+         (let ((ok (and (eq (process-status proc) 'exit)
+                        (zerop (process-exit-status proc))
+                        (file-exists-p img-file))))
+           (unless ok
+             (puthash img-file t org-typst-preview--failed)
+             (with-current-buffer
+                 (get-buffer-create "*org-typst-preview-errors*")
+               (goto-char (point-max))
+               (insert (format "--- %s ---\n%s\n"
+                               (format-time-string "%T") source))
+               (insert-buffer-substring (process-buffer proc))
+               (insert "\n")))
+           (ignore-errors (delete-file typ-file))
+           (kill-buffer (process-buffer proc))
+           (org-typst-preview--pump)
+           (funcall callback ok)))))))
+
+(defun org-typst-preview--wrap-failed-p (math displayp size color img-file)
+  "Non-nil if the wrapped render in IMG-FILE did not actually reflow.
+When Typst finds no legal break point in MATH, the fixed-width page
+just clips it, recognizable by the height not growing.  DISPLAYP,
+SIZE and COLOR identify the natural-size render to compare against."
+  (let ((dims (org-typst-preview--image-dims img-file))
+        (nat (org-typst-preview--image-dims
+              (nth 2 (org-typst-preview--target math displayp size color nil)))))
+    (and dims nat (< (cdr dims) (* 1.3 (cdr nat))))))
+
+(defun org-typst-preview--render (buf start end displayp math size color wrap-w)
+  "Ensure the fragment at START..END in BUF is displayed at a good width.
+Inline math whose natural size is wider than the window is reflowed:
+Typst re-lays it out at the window width (like Obsidian), with the
+natural image shown scaled down while that compiles.  If Typst finds
+no legal break point, the scaled version stays.  DISPLAYP, MATH, SIZE,
+COLOR and WRAP-W as in `org-typst-preview--source'; compiles
+asynchronously when an image is not cached yet."
+  (pcase-let ((`(,source ,hash ,img-file)
+               (org-typst-preview--target math displayp size color wrap-w)))
+    (let* ((avail (and (null wrap-w) (not displayp)
+                       (org-typst-preview--max-width buf)))
+           (dims (and avail (org-typst-preview--image-dims img-file))))
+      (if (and dims (> (car dims) avail))
+          ;; Natural size is known to be too wide for the window: keep (or
+          ;; put up) the scaled version and aim for the wrapped variant.
+          (pcase-let ((`(,_ ,whash ,_)
+                       (org-typst-preview--target math displayp size color avail)))
+            (unless (or (org-typst-preview--existing-with-hash start end whash)
+                        (org-typst-preview--existing-with-hash start end hash))
+              (org-typst-preview--place start end img-file hash))
+            (org-typst-preview--render buf start end displayp math size color
+                                       avail))
+        (cond
+         ((org-typst-preview--existing-with-hash start end hash) nil)
+         ((gethash img-file org-typst-preview--failed) nil)
+         ((file-exists-p img-file)
+          (if (and wrap-w (org-typst-preview--wrap-failed-p math displayp size
+                                                            color img-file))
+              (puthash img-file t org-typst-preview--failed)
+            (org-typst-preview--place start end img-file hash)))
+         (t
+          (org-typst-preview--compile-then-render source img-file buf start end
+                                                  displayp math size color
+                                                  wrap-w)))))))
+
+(defun org-typst-preview--compile-then-render (source img-file buf start end
+                                                      displayp math size color
+                                                      wrap-w)
+  "Compile SOURCE to IMG-FILE, then render the fragment at START..END in BUF.
+Rendering re-evaluates the window width, so an image that turns out too
+wide immediately requests its wrapped variant.  Skipped if the fragment
+text changed while compiling.  DISPLAYP, MATH, SIZE, COLOR and WRAP-W
+as elsewhere."
+  (let ((m-start (copy-marker start))
         (m-end (copy-marker end))
         (frag (buffer-substring-no-properties start end)))
     (org-typst-preview--compile-async
-     source fmt img-file
+     source (org-typst-preview--image-format) img-file
      (lambda (ok)
        (when (and ok (buffer-live-p buf))
          (with-current-buffer buf
@@ -295,12 +458,9 @@ the compile finishes."
                       (marker-position m-start) (marker-position m-end)
                       (equal frag (buffer-substring-no-properties m-start m-end))
                       (not (and (<= m-start (point)) (<= (point) m-end))))
-             (unless (org-typst-preview--existing-p (marker-position m-start)
-                                                    (marker-position m-end)
-                                                    hash)
-               (org-typst-preview--overlay (marker-position m-start)
-                                           (marker-position m-end)
-                                           img-file hash)))))
+             (org-typst-preview--render
+              buf (marker-position m-start) (marker-position m-end)
+              displayp math size color wrap-w))))
        (set-marker m-start nil)
        (set-marker m-end nil)))))
 
@@ -309,23 +469,33 @@ the compile finishes."
   (when (and (buffer-live-p buf) (display-images-p))
     (with-current-buffer buf
       (when org-typst-preview-mode
-        (let ((fmt (org-typst-preview--image-format))
-              (size (org-typst-preview--font-pt))
+        (let ((size (org-typst-preview--font-pt))
               (color (org-typst-preview--color-hex)))
           (dolist (frag (org-typst-preview--fragments))
             (pcase-let ((`(,start ,end ,displayp ,math) frag))
               (unless (and (<= start (point)) (<= (point) end))
-                (let* ((source (org-typst-preview--source math displayp size color))
-                       (hash (sha1 source))
-                       (img-file (expand-file-name
-                                  (format "%s.%s" hash fmt)
-                                  org-typst-preview-cache-dir)))
-                  (unless (or (org-typst-preview--existing-p start end hash)
-                              (gethash img-file org-typst-preview--failed))
-                    (if (file-exists-p img-file)
-                        (org-typst-preview--overlay start end img-file hash)
-                      (org-typst-preview--compile-then-place
-                       source fmt img-file hash start end))))))))))))
+                (org-typst-preview--render buf start end displayp math
+                                           size color nil)))))))))
+
+(defun org-typst-preview--refresh-images ()
+  "Rebuild the image specs of every preview in the current buffer.
+Runs after \\[text-scale-adjust] so previews zoom along with the text."
+  (let ((mw (org-typst-preview--max-width (current-buffer))))
+    (dolist (ov (overlays-in (point-min) (point-max)))
+      (when (and (overlay-get ov 'org-typst-preview)
+                 (overlay-get ov 'org-typst-preview-file))
+        (overlay-put ov 'org-typst-preview-max mw)
+        (overlay-put ov 'display
+                     (org-typst-preview--image
+                      (overlay-get ov 'org-typst-preview-file) mw))))))
+
+(defun org-typst-preview--schedule ()
+  "Debounce a re-scan of the current buffer onto an idle timer."
+  (when (timerp org-typst-preview--timer)
+    (cancel-timer org-typst-preview--timer))
+  (setq org-typst-preview--timer
+        (run-with-idle-timer org-typst-preview-delay nil
+                             #'org-typst-preview--scan (current-buffer))))
 
 (defun org-typst-preview--post-command ()
   "Reveal any preview the cursor moved into; schedule a re-scan."
@@ -335,11 +505,7 @@ the compile finishes."
                (<= (overlay-start ov) (point))
                (<= (point) (overlay-end ov)))
       (delete-overlay ov)))
-  (when (timerp org-typst-preview--timer)
-    (cancel-timer org-typst-preview--timer))
-  (setq org-typst-preview--timer
-        (run-with-idle-timer org-typst-preview-delay nil
-                             #'org-typst-preview--scan (current-buffer))))
+  (org-typst-preview--schedule))
 
 ;;;###autoload
 (define-minor-mode org-typst-preview-mode
@@ -352,12 +518,14 @@ into a rendered fragment reveals its source for editing."
       (progn
         (make-directory org-typst-preview-cache-dir t)
         (add-hook 'post-command-hook #'org-typst-preview--post-command nil t)
+        (add-hook 'text-scale-mode-hook #'org-typst-preview--refresh-images nil t)
         ;; Global on purpose: resize handling must outlive any one buffer,
         ;; and the handler no-ops for windows without the mode.
         (add-hook 'window-size-change-functions
                   #'org-typst-preview--window-resize)
         (org-typst-preview--scan (current-buffer)))
     (remove-hook 'post-command-hook #'org-typst-preview--post-command t)
+    (remove-hook 'text-scale-mode-hook #'org-typst-preview--refresh-images t)
     (when (timerp org-typst-preview--timer)
       (cancel-timer org-typst-preview--timer))
     (remove-overlays (point-min) (point-max) 'org-typst-preview t)))

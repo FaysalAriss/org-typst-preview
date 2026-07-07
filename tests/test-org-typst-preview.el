@@ -46,10 +46,16 @@
 ;; --- 2. typst source generation -------------------------------------------
 (check "inline source"
        (org-typst-preview--source "x^2" nil 12 "#ffffff")
-       "#set page(width: auto, height: auto, margin: 1.5pt, fill: none)\n#set text(size: 12pt, fill: rgb(\"#ffffff\"), top-edge: \"bounds\", bottom-edge: \"bounds\")\n$x^2$")
+       (concat "#set page(width: auto, height: auto, margin: 1.5pt, fill: none)\n"
+               "#set text(size: 12pt, fill: rgb(\"#ffffff\"), top-edge: \"bounds\", bottom-edge: \"bounds\")\n"
+               "$x^2$\n#pagebreak()\n#set text(bottom-edge: \"baseline\")\n$x^2$"))
 (check "display source uses spaced dollars"
        (string-suffix-p "$ x^2 $"
                         (org-typst-preview--source "x^2" t 12 "#ffffff"))
+       t)
+(check "wrapped source fixes the page width"
+       (string-prefix-p "#set page(width: 250pt,"
+                        (org-typst-preview--source "x^2" nil 12 "#ffffff" 250))
        t)
 
 ;; --- 3. real compilation through the async path ---------------------------
@@ -64,7 +70,7 @@
   (dolist (c cases)
     (let* ((name (car c))
            (source (cadr c))
-           (file (expand-file-name (concat (sha1 source) ".svg")
+           (file (expand-file-name (concat (sha1 source) "-1.svg")
                                    org-typst-preview-cache-dir)))
       (org-typst-preview--compile-async
        source 'svg file
@@ -76,9 +82,10 @@
          (sort (mapcar (lambda (r) (format "%s=%s" (car r) (cdr r))) results)
                #'string<)
          '("bad-syntax=nil" "good-display=t" "good-inline=t"))
-  ;; the good SVGs exist and contain drawing paths
+  ;; the good SVGs exist and contain drawing paths (2 pages per compile:
+  ;; the displayed image and the baseline-measurement page)
   (let ((svgs (directory-files org-typst-preview-cache-dir t "\\.svg\\'")))
-    (check "svg count" (length svgs) 2)
+    (check "svg count" (length svgs) 4)
     (check "svgs non-trivial"
            (cl-every (lambda (f)
                        (with-temp-buffer
@@ -93,8 +100,8 @@
            nil))
   ;; error was logged for the bad fragment
   (check "error logged"
-         (and (get-buffer "*typst-preview-errors*")
-              (with-current-buffer "*typst-preview-errors*"
+         (and (get-buffer "*org-typst-preview-errors*")
+              (with-current-buffer "*org-typst-preview-errors*"
                 (> (buffer-size) 0)))
          t))
 

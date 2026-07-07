@@ -18,12 +18,21 @@ Typst's lightweight math syntax (`alpha`, `sum_(k=1)^n`, `integral_0^oo`,
 
 - **Live round-tripping** — render on cursor exit, reveal source on entry,
   re-render instantly from cache when you leave again.
-- **Asynchronous** — compilation runs in background processes; Emacs never
-  blocks, even with many fragments.
+- **Asynchronous** — compilation runs in background processes (at most
+  `org-typst-preview-max-processes` at a time); Emacs never blocks, even
+  with many fragments.
 - **Cached forever** — images are keyed by content, colour, and font size;
   each distinct fragment compiles exactly once across sessions.
-- **Theme-aware** — glyphs use your theme's foreground colour on a
-  transparent background, sized to match your font.
+- **Baseline-aligned** — every render includes a second measurement page
+  that locates the math baseline, so images sit on the text baseline like
+  real typography instead of being vertically centered.
+- **Wraps like Obsidian** — inline math wider than the window is re-laid-out
+  by Typst at the window width, flowing onto multiple lines; it returns to
+  natural size when the window widens.  Display math scales to fit instead
+  (unbreakable inline math too).
+- **Theme- and zoom-aware** — glyphs use your theme's foreground colour on
+  a transparent background, sized to match your font, and previews follow
+  `text-scale-adjust` (`C-x C-+`) zooming.
 - **Forgiving** — broken math stays as plain text (compiler output goes to
   `*org-typst-preview-errors*`); money like "I paid $5" is ignored; `\$`
   escapes a literal dollar sign; code blocks are left alone.
@@ -97,11 +106,25 @@ Suggested keybindings:
   fragments once to match.
 - Because rendered images follow real ink extents, a line with tall math
   (big exponents, integrals) grows slightly taller than a plain line.
-- Images are automatically capped at the window's text width and shrink
-  to fit when you narrow the window (re-expanding when you widen it).
-  Besides looking right, this works around an Emacs redisplay hang that
-  occurs when an image is wider than its window while `visual-line-mode`
-  and `display-line-numbers-mode` are both enabled.
+- Inline math wider than the window is re-rendered wrapped at the window
+  width; display math and unbreakable inline math scale down instead.
+  Every image is also hard-capped at the window's text width, which
+  works around an Emacs redisplay hang that occurs when an image is
+  wider than its window while `visual-line-mode` and
+  `display-line-numbers-mode` are both enabled.
+
+## Prior art
+
+[xenops](https://github.com/dandavison/xenops) pioneered per-element
+async rendering with content-keyed caching for LaTeX, and the
+[org-latex-preview overhaul](https://github.com/karthink/org-preview)
+(now part of newer Org) added baseline alignment, theme-matched colours,
+and text-scale tracking — this package borrows all of those ideas and
+applies them to Typst, whose millisecond compiles make the live-preview
+loop feel instant.  The baseline trick differs by necessity: instead of
+dvipng's `--depth` output, each render carries a second Typst page whose
+text box ends at the baseline, and the height difference gives the
+ascent. 
 
 ## Development
 

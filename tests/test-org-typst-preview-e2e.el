@@ -50,6 +50,13 @@
                            (and (eq (car-safe d) 'image)
                                 (file-exists-p (plist-get (cdr d) :file)))))
                        ovs)
+             t)
+      (check "baseline ascent computed and sane"
+             (cl-every (lambda (ov)
+                         (let ((a (org-typst-preview--ascent
+                                   (plist-get (cdr (overlay-get ov 'display)) :file))))
+                           (and (integerp a) (<= 10 a 100))))
+                       ovs)
              t))
 
     ;; --- cursor moves INTO the first fragment -> source revealed ----------
@@ -78,6 +85,45 @@
     (check "clear removes all previews + mode"
            (list (length (preview-overlays)) org-typst-preview-mode)
            '(0 nil))))
+
+;; --- wrapping of long inline math at window width ---------------------------
+(cl-letf (((symbol-function 'display-images-p) (lambda (&rest _) t))
+          ((symbol-function 'image-type-available-p) (lambda (type) (eq type 'svg)))
+          ((symbol-function 'create-image)
+           (lambda (file type &rest props) (append (list 'image :file file :type type) props)))
+          ;; pretend every window showing the buffer is 200px wide
+          ((symbol-function 'org-typst-preview--max-width) (lambda (_) 200))
+          ;; batch mode has no real font; render at a GUI-realistic 15pt
+          ((symbol-function 'org-typst-preview--font-pt) (lambda () 15)))
+
+  (with-temp-buffer
+    (org-mode)
+    (insert "Long: $x^2 + y^2 + z^2 + a^2 + b^2 + c^2 + d^2 + e^2 + f^2 + g^2 + h^2 = r^2 + s^2$ end.\n"
+            "Unbreakable: $sqrt(a_1 + a_2 + a_3 + a_4 + a_5 + a_6 + a_7 + a_8 + a_9 + a_10 + a_11 + a_12)$ end.\n")
+    (org-typst-preview-mode 1)
+    (goto-char (point-max))
+    (org-typst-preview--scan (current-buffer))
+    (wait-for-compiles)                 ; unwrapped compiles + wrapped requests
+    (wait-for-compiles)                 ; wrapped compiles
+    (let* ((ovs (sort (preview-overlays)
+                      (lambda (a b) (< (overlay-start a) (overlay-start b)))))
+           (files (mapcar (lambda (ov)
+                            (plist-get (cdr (overlay-get ov 'display)) :file))
+                          ovs))
+           (dims (mapcar #'org-typst-preview--image-dims files)))
+      (check "both fragments still rendered" (length ovs) 2)
+      (check "breakable math reflowed to fit 200px"
+             (and (car dims)
+                  (<= (car (car dims)) 200)
+                  (> (cdr (car dims)) 30)) ; several lines tall
+             t)
+      (check "unbreakable math kept scaled unwrapped image"
+             (and (cadr dims) (> (car (cadr dims)) 200))
+             t)
+      (check "failed wrap remembered (no retry loop)"
+             (> (hash-table-count org-typst-preview--failed) 0)
+             t))
+    (org-typst-preview-clear)))
 
 (if (> test-failures 0)
     (kill-emacs 1)
