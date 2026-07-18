@@ -102,7 +102,7 @@ Suggested keybindings:
 
 | Variable                      | Default   | Purpose                             |
 |-------------------------------|-----------|-------------------------------------|
-| `org-typst-preview-overflow-style` | `wrap` | what to do with math wider than the window: `wrap` / `scale` / `overflow` (see below) |
+| `org-typst-preview-overflow-style` | `wrap` | what to do with math wider than the window: `wrap` / `scale` (see below) |
 | `org-typst-preview-scale`     | `1.0`     | extra image scaling if math looks too small/large |
 | `org-typst-preview-delay`     | `0.25`    | idle seconds before re-scanning     |
 | `org-typst-preview-program`   | `"typst"` | path to the typst executable        |
@@ -117,14 +117,9 @@ What happens when math is wider than the window:
   so it flows onto multiple lines at a constant font size, like text.
 - **`scale`** — the image shrinks to fit (the font looks smaller when
   space is tight).
-- **`overflow`** — the math keeps its natural size and is clipped at
-  the right window edge, like a long line under `truncate-lines`;
-  widening the window reveals more.  Word wrap moves the image to its
-  own screen line first, so only math wider than the whole window gets
-  clipped.
 
 ```elisp
-(setq org-typst-preview-overflow-style 'overflow)   ; or 'scale / 'wrap
+(setq org-typst-preview-overflow-style 'scale)   ; or 'wrap
 ```
 
 ## Notes & limitations

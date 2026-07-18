@@ -96,18 +96,9 @@ next to your text."
            text while it cannot fit.
 
 `scale'    Shrink the image to fit the window (the font appears
-           smaller when space is tight).
-
-`overflow' Keep the natural size and clip the math at the right
-           window edge, like a long line under `truncate-lines';
-           widening the window reveals more.  Word wrap puts the
-           image on its own screen line first, so only math wider
-           than the whole window gets clipped.  (The clip is baked
-           into the image because Emacs's redisplay can hang on
-           images genuinely wider than their window.)"
+           smaller when space is tight)."
   :type '(choice (const :tag "Re-wrap at window width, like text" wrap)
-                 (const :tag "Scale down to fit" scale)
-                 (const :tag "Overflow past the window edge" overflow)))
+                 (const :tag "Scale down to fit" scale)))
 
 ;; A math fragment is $...$ or $$...$$ on a single line, whose content
 ;; starts and ends with a non-space character -- the same rule Org and
@@ -325,48 +316,18 @@ Every width decision (does this fit?  how wide should the wrap be?)
 must use displayed sizes, or zoomed-in images overflow their window."
   (* org-typst-preview-scale (org-typst-preview--text-scale)))
 
-(defun org-typst-preview--cropped-file (img-file crop-pt)
-  "Return a copy of SVG IMG-FILE clipped to CROP-PT points of width.
-The derivative is written next to the original in the cache; content
-right of the clip falls outside the viewBox, so the image LOOKS like
-it overflows the window and is cut off at the edge, while the glyph
-Emacs lays out is never wider than the window (an over-wide image can
-hang redisplay -- see `org-typst-preview--max-width')."
-  (let ((out (format "%s-crop%d.svg" (substring img-file 0 -4) crop-pt)))
-    (unless (file-exists-p out)
-      (with-temp-buffer
-        (insert-file-contents img-file)
-        (goto-char (point-min))
-        (when (re-search-forward
-               "viewBox=\"0 0 \\([0-9.]+\\) \\([0-9.]+\\)\"" nil t)
-          (replace-match (format "viewBox=\"0 0 %d %s\""
-                                 crop-pt (match-string 2))))
-        (goto-char (point-min))
-        (when (re-search-forward "width=\"[0-9.]+pt\"" nil t)
-          (replace-match (format "width=\"%dpt\"" crop-pt)))
-        (write-region (point-min) (point-max) out nil 'silent)))
-    out))
-
 (defun org-typst-preview--image (img-file max-width)
   "Image spec for IMG-FILE fitting into MAX-WIDTH pixels (nil = no limit).
 The image sits on the text baseline when the measurement page is
 available, and scales with the buffer's text scale.  In `scale' style
 MAX-WIDTH shrinks the image via :max-width (in `wrap' style that cap
-is only a safety net); in `overflow' style an over-wide image is
-instead clipped at the window edge, keeping its natural size."
+is only a safety net)."
   (let* ((fmt (org-typst-preview--image-format))
          (ascent (or (org-typst-preview--ascent img-file) 'center))
          (file img-file)
          (props nil))
-    (if (eq org-typst-preview-overflow-style 'overflow)
-        (let ((dims (org-typst-preview--image-dims img-file))
-              (dscale (org-typst-preview--display-scale)))
-          (when (and max-width dims (eq fmt 'svg)
-                     (> (* (car dims) dscale) max-width))
-            (setq file (org-typst-preview--cropped-file
-                        img-file (max 10 (floor (/ max-width dscale)))))))
-      (when max-width
-        (setq props (list :max-width max-width))))
+    (when max-width
+      (setq props (list :max-width max-width)))
     (apply #'create-image file fmt nil
            :ascent ascent
            ;; PNGs are rendered at 192ppi (2.667px per pt); 72/192 shrinks
@@ -397,10 +358,9 @@ instead clipped at the window edge, keeping its natural size."
 `wrap': previews too wide for their window are removed -- the raw text
 shows at the normal, constant font size until the re-wrapped image
 arrives via the scheduled scan.  `scale': every preview's width cap is
-refreshed so it shrinks or grows with the window.  `overflow': nothing
-to do.  In no style is an image left wider than its window unwittingly,
-which would risk an Emacs redisplay hang -- see
-`org-typst-preview--max-width'."
+refreshed so it shrinks or grows with the window.  In no style is an
+image left wider than its window unwittingly, which would risk an Emacs
+redisplay hang -- see `org-typst-preview--max-width'."
   (dolist (win (window-list frame 'nomini))
     (let ((buf (window-buffer win)))
       (when (buffer-local-value 'org-typst-preview-mode buf)
@@ -420,9 +380,8 @@ which would risk an Emacs redisplay hang -- see
                ;; re-flow wrapped math to the new width once resizing pauses
                (org-typst-preview--schedule)))
             ;; scale: refresh the :max-width caps so images shrink/grow
-            ;; with the window.  overflow: refresh the crop points so the
-            ;; clipped-at-the-edge portion tracks the window width.
-            ((or 'scale 'overflow)
+            ;; with the window.
+            ('scale
              (let ((cap (org-typst-preview--max-width buf)))
                (when cap
                  (dolist (ov (overlays-in (point-min) (point-max)))
