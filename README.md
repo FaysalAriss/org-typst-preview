@@ -26,15 +26,25 @@ Typst's lightweight math syntax (`alpha`, `sum_(k=1)^n`, `integral_0^oo`,
 - **Baseline-aligned** — every render includes a second measurement page
   that locates the math baseline, so images sit on the text baseline like
   real typography instead of being vertically centered.
-- **Wraps like Obsidian** — inline math wider than the window is re-laid-out
-  by Typst at the window width, flowing onto multiple lines; it returns to
-  natural size when the window widens.  Display math scales to fit instead
-  (unbreakable inline math too).
+- **Wraps like text, never scales** — math wider than the window is
+  re-laid-out by Typst at the window width, flowing onto multiple lines
+  at a constant font size (display math keeps its large operator glyphs
+  while flowing); it returns to natural one-line layout when the window
+  widens.  The font size never changes: while a re-wrap compiles — or if
+  the math has no legal break point at all — the fragment shows as plain
+  text rather than a shrunken image.
+- **Optically size-matched** — the math size is calibrated at runtime by
+  measuring your font's actual glyphs, so a `c` in math has the same ink
+  height as a `c` in your text (x-height matching, the idea behind CSS
+  `font-size-adjust`).
 - **Theme- and zoom-aware** — glyphs use your theme's foreground colour on
   a transparent background, sized to match your font, and previews follow
   `text-scale-adjust` (`C-x C-+`) zooming.
-- **Forgiving** — broken math stays as plain text (compiler output goes to
-  `*org-typst-preview-errors*`); money like "I paid $5" is ignored; `\$`
+- **Forgiving** — broken math stays as plain text with a red wavy
+  underline and Typst's own message inline right after it (e.g.
+  `error: unknown variable: frall`), clearing the moment you edit the
+  fragment; the full compiler output for the most recent failure is in
+  `*org-typst-preview-errors*`.  Money like "I paid $5" is ignored; `\$`
   escapes a literal dollar sign; code blocks are left alone.
 
 ## Requirements
@@ -92,10 +102,30 @@ Suggested keybindings:
 
 | Variable                      | Default   | Purpose                             |
 |-------------------------------|-----------|-------------------------------------|
+| `org-typst-preview-overflow-style` | `wrap` | what to do with math wider than the window: `wrap` / `scale` / `overflow` (see below) |
 | `org-typst-preview-scale`     | `1.0`     | extra image scaling if math looks too small/large |
 | `org-typst-preview-delay`     | `0.25`    | idle seconds before re-scanning     |
 | `org-typst-preview-program`   | `"typst"` | path to the typst executable        |
 | `org-typst-preview-cache-dir` | `~/.emacs.d/org-typst-preview-cache` | image cache (safe to delete) |
+| `org-typst-preview-max-processes` | `4`   | concurrent typst compiles           |
+
+### Overflow styles
+
+What happens when math is wider than the window:
+
+- **`wrap`** (default) — Typst re-lays the math out at the window width
+  so it flows onto multiple lines at a constant font size, like text.
+- **`scale`** — the image shrinks to fit (the font looks smaller when
+  space is tight).
+- **`overflow`** — the math keeps its natural size and is clipped at
+  the right window edge, like a long line under `truncate-lines`;
+  widening the window reveals more.  Word wrap moves the image to its
+  own screen line first, so only math wider than the whole window gets
+  clipped.
+
+```elisp
+(setq org-typst-preview-overflow-style 'overflow)   ; or 'scale / 'wrap
+```
 
 ## Notes & limitations
 
@@ -106,12 +136,15 @@ Suggested keybindings:
   fragments once to match.
 - Because rendered images follow real ink extents, a line with tall math
   (big exponents, integrals) grows slightly taller than a plain line.
-- Inline math wider than the window is re-rendered wrapped at the window
-  width; display math and unbreakable inline math scale down instead.
-  Every image is also hard-capped at the window's text width, which
-  works around an Emacs redisplay hang that occurs when an image is
-  wider than its window while `visual-line-mode` and
+- Math wider than the window is re-rendered wrapped at the window width
+  at constant font size; math with no legal break point shows as plain
+  text when it cannot fit.  An image is never displayed wider than its
+  window, which also avoids an Emacs redisplay hang that occurs when an
+  image overflows the window while `visual-line-mode` and
   `display-line-numbers-mode` are both enabled.
+- If the calibrated math size still reads bigger or smaller than your
+  text to your eye, adjust `org-typst-preview-scale` (it multiplies the
+  calibrated size).
 
 ## Prior art
 

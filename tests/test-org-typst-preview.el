@@ -57,6 +57,10 @@
        (string-prefix-p "#set page(width: 250pt,"
                         (org-typst-preview--source "x^2" nil 12 "#ffffff" 250))
        t)
+(check "wrapped display source uses inline display() so it can break"
+       (string-suffix-p "$display(x^2)$"
+                        (org-typst-preview--source "x^2" t 12 "#ffffff" 250))
+       t)
 
 ;; --- 3. real compilation through the async path ---------------------------
 (make-directory org-typst-preview-cache-dir t)
@@ -98,11 +102,36 @@
     (check "typ files cleaned up"
            (directory-files org-typst-preview-cache-dir nil "\\.typ\\'")
            nil))
-  ;; error was logged for the bad fragment
+  ;; error was logged for the bad fragment, with the message extracted
   (check "error logged"
          (and (get-buffer "*org-typst-preview-errors*")
               (with-current-buffer "*org-typst-preview-errors*"
                 (> (buffer-size) 0)))
+         t)
+  (check "error message parsed for inline display"
+         (let ((msg (cdr (gethash (expand-file-name
+                                   (concat (sha1 (cadr (nth 2 cases))) "-1.svg")
+                                   org-typst-preview-cache-dir)
+                                  org-typst-preview--failed))))
+           (and (stringp msg) (string-prefix-p "error:" msg) t))
+         t))
+
+;; --- 3b. the hardcoded math ink ratio still matches this typst ------------
+(let* ((source (org-typst-preview--source "x" nil 100 "#000000"))
+       (file (expand-file-name (concat (sha1 source) "-1.svg")
+                               org-typst-preview-cache-dir))
+       (done nil))
+  (org-typst-preview--compile-async source 'svg file (lambda (_) (setq done t)))
+  (let ((deadline (+ (float-time) 15)))
+    (while (and (not done) (< (float-time) deadline))
+      (accept-process-output nil 0.1)))
+  (check "math x ink ratio close to the calibration constant"
+         (let ((dims (org-typst-preview--image-dims file)))
+           ;; ink height = page height minus 2 x 1.5pt margins, at 100pt
+           (and dims
+                (< (abs (- (/ (- (cdr dims) 3.0) 100)
+                           org-typst-preview--math-x-ratio))
+                   0.02)))
          t))
 
 ;; --- 4. cursor-position logic used by the scanner --------------------------
