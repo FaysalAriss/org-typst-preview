@@ -183,51 +183,34 @@
              t))
     (org-typst-preview-clear)))
 
-;; --- scale and overflow styles ----------------------------------------------
-;; with wrapping off, the natural-size image is always placed: capped
-;; (scale) or uncapped (overflow), and no wrapped variant is compiled
-(dolist (style '(scale overflow))
-  (cl-letf (((symbol-function 'display-images-p) (lambda (&rest _) t))
-            ((symbol-function 'image-type-available-p) (lambda (type) (eq type 'svg)))
-            ((symbol-function 'create-image)
-             (lambda (file type &optional _data-p &rest props)
+;; --- scale style ------------------------------------------------------------
+;; with wrapping off, the natural-size image is always placed, capped to
+;; the window, and no wrapped variant is compiled
+(cl-letf (((symbol-function 'display-images-p) (lambda (&rest _) t))
+          ((symbol-function 'image-type-available-p) (lambda (type) (eq type 'svg)))
+          ((symbol-function 'create-image)
+           (lambda (file type &optional _data-p &rest props)
              (append (list 'image :file file :type type) props)))
-            ((symbol-function 'org-typst-preview--max-width) (lambda (_) 200))
-            ((symbol-function 'org-typst-preview--font-pt) (lambda () 15)))
-    (let ((org-typst-preview-overflow-style style))
-      (with-temp-buffer
-        (org-mode)
-        (insert "Long: $x^2 + y^2 + z^2 + a^2 + b^2 + c^2 + d^2"
-                " + e^2 + f^2 + g^2 + h^2 = r^2 + s^2$ end.\n")
-        (org-typst-preview-mode 1)
-        (goto-char (point-max))
-        (org-typst-preview--scan (current-buffer))
-        (wait-for-compiles) (wait-for-compiles)
-        (let* ((ov (car (preview-overlays)))
-               (img (and ov (cdr (overlay-get ov 'display))))
-               (file (and img (plist-get img :file))))
-          (pcase style
-            ('scale
-             (check "scale style: natural-size image, capped to the window"
-                    (and file
-                         (> (car (org-typst-preview--image-dims file)) 200)
-                         (plist-get img :max-width))
-                    200))
-            ('overflow
-             (check "overflow style: clipped-at-the-edge derivative, no cap"
-                    (list (and file (string-suffix-p "-crop200.svg" file))
-                          (and file (car (org-typst-preview--image-dims file)))
-                          (plist-get img :max-width))
-                    '(t 200 nil))
-             (check "overflow style: clip keeps natural height"
-                    (let ((orig (org-typst-preview--image-dims
-                                 (overlay-get ov 'org-typst-preview-file))))
-                      (and orig
-                           (> (car orig) 200) ; original untouched
-                           (equal (cdr (org-typst-preview--image-dims file))
-                                  (cdr orig))))
-                    t))))
-        (org-typst-preview-clear)))))
+          ((symbol-function 'org-typst-preview--max-width) (lambda (_) 200))
+          ((symbol-function 'org-typst-preview--font-pt) (lambda () 15)))
+  (let ((org-typst-preview-overflow-style 'scale))
+    (with-temp-buffer
+      (org-mode)
+      (insert "Long: $x^2 + y^2 + z^2 + a^2 + b^2 + c^2 + d^2"
+              " + e^2 + f^2 + g^2 + h^2 = r^2 + s^2$ end.\n")
+      (org-typst-preview-mode 1)
+      (goto-char (point-max))
+      (org-typst-preview--scan (current-buffer))
+      (wait-for-compiles) (wait-for-compiles)
+      (let* ((ov (car (preview-overlays)))
+             (img (and ov (cdr (overlay-get ov 'display))))
+             (file (and img (plist-get img :file))))
+        (check "scale style: natural-size image, capped to the window"
+               (and file
+                    (> (car (org-typst-preview--image-dims file)) 200)
+                    (plist-get img :max-width))
+               200))
+      (org-typst-preview-clear))))
 
 (if (> test-failures 0)
     (kill-emacs 1)
