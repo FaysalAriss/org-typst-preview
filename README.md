@@ -1,64 +1,63 @@
 # org-typst-preview
 
-Obsidian-style live math previews for Emacs Org mode — with
-[Typst](https://typst.app) as the math language instead of LaTeX.
+Live math previews for Emacs Org mode, written in
+[Typst](https://typst.app) instead of LaTeX.
 
-```org
-The identity $e^(i pi) + 1 = 0$ renders inline, and display math
-uses double dollars: $$sum_(k=1)^n k = (n(n+1))/2$$
-```
-
-A fragment turns into a rendered image the moment your cursor leaves the
-dollar signs, and turns back into editable text when you click into it or
-arrow onto it — the same live-preview feel as Obsidian, but you write
-Typst's lightweight math syntax (`alpha`, `sum_(k=1)^n`, `integral_0^oo`,
-`sqrt(x)`) rather than LaTeX backslash commands.
+---
+<p align="center">
+  <img src="docs/demo.png" alt="org-typst-preview live demo" width="720">
+</p>
 
 ## Features
 
-- **Live round-tripping** — render on cursor exit, reveal source on entry,
-  re-render instantly from cache when you leave again.
+- **Live preview** — renders when cursor exists equation, goes back to source on entry.
+- **Multi-line display math** — `$$...$$` may span several lines and open
+  on its own line; inline `$...$` stays on one line so prose and prices
+  never pair up across lines.
 - **Asynchronous** — compilation runs in background processes (at most
   `org-typst-preview-max-processes` at a time); Emacs never blocks, even
   with many fragments.
-- **Cached forever** — images are keyed by content, colour, and font size;
-  each distinct fragment compiles exactly once across sessions.
-- **Baseline-aligned** — every render includes a second measurement page
-  that locates the math baseline, so images sit on the text baseline like
-  real typography instead of being vertically centered.
-- **Wraps like text, never scales** — math wider than the window is
-  re-laid-out by Typst at the window width, flowing onto multiple lines
-  at a constant font size (display math keeps its large operator glyphs
-  while flowing); it returns to natural one-line layout when the window
-  widens.  The font size never changes: while a re-wrap compiles — or if
-  the math has no legal break point at all — the fragment shows as plain
-  text rather than a shrunken image.
+- **Self-managing cache** — equations are rendered as images, and are saved to a cache to avoid re-rendering; while also garbage collecting to minimize space used.
+- **Baseline-aligned** — every render measures the equation's true inline
+  baseline, so images sit on the text baseline like real typography.
+  Even deep fractions and matrices land on the baseline instead of
+  floating above it.
+- **Reflows to fit** — math wider than the window is re-laid-out by Typst
+  at the window width, flowing onto multiple lines instead of running off
+  the edge; display math keeps its large operator glyphs while flowing,
+  and it returns to one line when the window widens. While a re-wrap
+  compiles, or if the math has no legal break point, the fragment shows
+  as plain text. (An alternative `scale` mode shrinks the image instead —
+  see [Overflow styles](#overflow-styles).)
 - **Optically size-matched** — the math size is calibrated at runtime by
   measuring your font's actual glyphs, so a `c` in math has the same ink
   height as a `c` in your text (x-height matching, the idea behind CSS
   `font-size-adjust`).
-- **Theme- and zoom-aware** — glyphs use your theme's foreground colour on
-  a transparent background, sized to match your font, and previews follow
-  `text-scale-adjust` (`C-x C-+`) zooming.
+- **Theme- and zoom-aware** — glyphs use your theme's foreground colour
+  on a transparent background, sized to match your font, and previews
+  follow `text-scale-adjust` (`C-x C-+`) zooming.
 - **Forgiving** — broken math stays as plain text with a red wavy
   underline and Typst's own message inline right after it (e.g.
   `error: unknown variable: frall`), clearing the moment you edit the
   fragment; the full compiler output for the most recent failure is in
-  `*org-typst-preview-errors*`.  Money like "I paid $5" is ignored; `\$`
-  escapes a literal dollar sign; code blocks are left alone.
+  `*org-typst-preview-errors*`. Money like "I paid $5" is ignored, `\$`
+  escapes a literal dollar sign, and code blocks are left alone.
 
-## Requirements
+## Getting started
 
-- Emacs 27.1+ (SVG support recommended; falls back to PNG without it)
-- the [`typst` CLI](https://github.com/typst/typst) on your `PATH`
-  (`brew install typst` on macOS)
+### Requirements
 
-## Installation
+- Emacs 27.1+ (SVG support recommended; falls back to PNG without it).
+- The [`typst` CLI](https://github.com/typst/typst) on your `PATH`
+  (`brew install typst` on macOS). Tested with Typst 0.15; a recent
+  version is recommended.
 
-Not on MELPA (yet) — install manually:
+### Installation
+
+Not on MELPA yet — install manually. Put `org-typst-preview.el` somewhere
+on your `load-path`, then:
 
 ```elisp
-;; put org-typst-preview.el somewhere on your load-path, then:
 (require 'org-typst-preview)
 (add-hook 'org-mode-hook #'org-typst-preview-mode)
 ```
@@ -72,44 +71,23 @@ or with `use-package`:
   :hook (org-mode . org-typst-preview-mode))
 ```
 
-## Usage
+### Customization
 
-Just write math between dollar signs in any Org buffer:
+`M-x customize-group RET org-typst-preview`, or set any of these with
+`setq`:
 
-| You type                     | You get                          |
-|------------------------------|----------------------------------|
-| `$x^2 + y^2 = z^2$`          | inline math                      |
-| `$$integral_0^oo e^(-x^2) dif x$$` | display-style math (one line) |
-| `\$5 and \$10`               | literal dollar signs, no math    |
+| Variable                             | Default   | Purpose                                                        |
+|--------------------------------------|-----------|----------------------------------------------------------------|
+| `org-typst-preview-overflow-style`   | `wrap`    | what to do with math wider than the window: `wrap` / `scale`   |
+| `org-typst-preview-scale`            | `1.0`     | extra image scaling if math looks too small/large              |
+| `org-typst-preview-delay`            | `0.25`    | idle seconds before re-scanning                                |
+| `org-typst-preview-program`          | `"typst"` | path to the typst executable                                   |
+| `org-typst-preview-max-processes`    | `4`       | concurrent typst compiles                                      |
+| `org-typst-preview-cache-dir`        | `~/.emacs.d/org-typst-preview-cache` | image cache (safe to delete) |
+| `org-typst-preview-cache-max-bytes`  | `50000000` | soft cap on cache size in bytes (`nil` disables)              |
+| `org-typst-preview-cache-max-age-days` | `30`    | delete images untouched this many days (`nil` disables)        |
 
-Interactive commands:
-
-- `M-x org-typst-preview-buffer` — enable previews and render everything now
-- `M-x org-typst-preview-clear` — remove previews and stop auto-rendering
-- `M-x org-typst-preview-mode` — toggle the minor mode
-
-Suggested keybindings:
-
-```elisp
-(with-eval-after-load 'org
-  (define-key org-mode-map (kbd "C-c t p") #'org-typst-preview-buffer)
-  (define-key org-mode-map (kbd "C-c t c") #'org-typst-preview-clear))
-```
-
-## Customization
-
-`M-x customize-group org-typst-preview`, or:
-
-| Variable                      | Default   | Purpose                             |
-|-------------------------------|-----------|-------------------------------------|
-| `org-typst-preview-overflow-style` | `wrap` | what to do with math wider than the window: `wrap` / `scale` (see below) |
-| `org-typst-preview-scale`     | `1.0`     | extra image scaling if math looks too small/large |
-| `org-typst-preview-delay`     | `0.25`    | idle seconds before re-scanning     |
-| `org-typst-preview-program`   | `"typst"` | path to the typst executable        |
-| `org-typst-preview-cache-dir` | `~/.emacs.d/org-typst-preview-cache` | image cache (safe to delete) |
-| `org-typst-preview-max-processes` | `4`   | concurrent typst compiles           |
-
-### Overflow styles
+#### Overflow styles
 
 What happens when math is wider than the window:
 
@@ -119,40 +97,80 @@ What happens when math is wider than the window:
   space is tight).
 
 ```elisp
-(setq org-typst-preview-overflow-style 'scale)   ; or 'wrap
+(setq org-typst-preview-overflow-style 'wrap)   ; or 'scale
 ```
+
+### Usage
+
+Just write math between dollar signs in any Org buffer:
+
+| You type                             | You get                          |
+|--------------------------------------|----------------------------------|
+| `$x^2 + y^2 = z^2$`                  | inline math                      |
+| `$$integral_0^oo e^(-x^2) dif x$$`  | display-style math               |
+| a `$$...$$` block across lines        | multi-line display math          |
+| `\$5 and \$10`                       | literal dollar signs, no math    |
+
+Interactive commands:
+
+- `M-x org-typst-preview-buffer` — enable previews and render everything now
+- `M-x org-typst-preview-clear` — remove previews and stop auto-rendering
+- `M-x org-typst-preview-mode` — toggle the minor mode
+- `M-x org-typst-preview-prune-cache` — trim the image cache to its caps now
+- `M-x org-typst-preview-clear-cache` — delete every cached image
+
+The cache is also pruned automatically once per session, so you rarely
+need these last two by hand.
+
+Suggested keybindings:
+
+```elisp
+(with-eval-after-load 'org
+  (define-key org-mode-map (kbd "C-c t p") #'org-typst-preview-buffer)
+  (define-key org-mode-map (kbd "C-c t c") #'org-typst-preview-clear))
+```
+
+## Roadmap
+
+- [ ] **Publish to MELPA** so it installs without a manual `load-path`.
+- [ ] **Org export integration** — today previews are display-only; make
+      Typst math render when exporting Org to HTML/PDF.
 
 ## Notes & limitations
 
-- Fragments must fit on a single line (both `$...$` and `$$...$$`).
-- Like Obsidian, two prices on one line (`$10 ... 100$`) can pair up as
-  math; escape with `\$` when that happens.
+- Inline `$...$` must stay on one line; display `$$...$$` may span lines.
+- Two prices on one line (`$10 ... 100$`) can pair up as math; escape
+  with `\$` when that happens.
 - Images are cached per foreground colour, so switching themes re-renders
   fragments once to match.
 - Because rendered images follow real ink extents, a line with tall math
-  (big exponents, integrals) grows slightly taller than a plain line.
-- Math wider than the window is re-rendered wrapped at the window width
-  at constant font size; math with no legal break point shows as plain
-  text when it cannot fit.  An image is never displayed wider than its
-  window, which also avoids an Emacs redisplay hang that occurs when an
-  image overflows the window while `visual-line-mode` and
-  `display-line-numbers-mode` are both enabled.
+  (big exponents, integrals, deep fractions) grows slightly taller than a
+  plain line.
+- Math with no legal break point shows as plain text when it cannot fit.
+  An image is never displayed wider than its window, which also avoids an
+  Emacs redisplay hang that occurs when an image overflows the window
+  while `visual-line-mode` and `display-line-numbers-mode` are both on.
 - If the calibrated math size still reads bigger or smaller than your
-  text to your eye, adjust `org-typst-preview-scale` (it multiplies the
-  calibrated size).
+  text, adjust `org-typst-preview-scale` (it multiplies the calibrated
+  size).
 
 ## Prior art
 
-[xenops](https://github.com/dandavison/xenops) pioneered per-element
-async rendering with content-keyed caching for LaTeX, and the
-[org-latex-preview overhaul](https://github.com/karthink/org-preview)
-(now part of newer Org) added baseline alignment, theme-matched colours,
-and text-scale tracking — this package borrows all of those ideas and
-applies them to Typst, whose millisecond compiles make the live-preview
-loop feel instant.  The baseline trick differs by necessity: instead of
-dvipng's `--depth` output, each render carries a second Typst page whose
-text box ends at the baseline, and the height difference gives the
-ascent. 
+org-typst-preview builds on two projects' ideas:
+
+- [xenops](https://github.com/dandavison/xenops) has per fragment
+  asynchronous rendering with content-keyed on-disk caching for LaTeX.
+- The [org-latex-preview overhaul](https://github.com/karthink/org-preview)
+  (now part of newer Org) added baseline alignment, theme-matched
+  foreground colours, and `text-scale` tracking.
+
+This package borrows both and applies them to Typst, whose millisecond
+compiles make the render-on-cursor-exit loop feel instant. The baseline
+alignment necessarily works differently: with no dvipng `--depth` to
+read, each render carries a second Typst page with a marker hung from the
+line baseline, and the height difference gives the true inline baseline —
+which stays correct even for stacked math (deep fractions, matrices) that
+a naive baseline query would place too high.
 
 ## Development
 
