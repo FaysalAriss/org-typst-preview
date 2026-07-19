@@ -87,6 +87,18 @@ next to your text."
   "Directory holding compiled math images.  Safe to delete at any time."
   :type 'directory)
 
+(defcustom org-typst-preview-cache-max-bytes 50000000
+  "Soft cap on the image cache size, in bytes (nil disables the cap).
+When the cache is pruned and exceeds this, whole fragments are deleted
+oldest-first until it fits.  Deleted images recompile on demand, so the
+cap only trades a little disk for the odd millisecond recompile."
+  :type '(choice (const :tag "No size cap" nil) natnum))
+
+(defcustom org-typst-preview-cache-max-age-days 30
+  "Delete cached images untouched for more than this many days (nil = keep).
+Applied whenever the cache is pruned; deleted images recompile on demand."
+  :type '(choice (const :tag "No age limit" nil) natnum))
+
 (defcustom org-typst-preview-overflow-style 'wrap
   "How to handle math wider than the window.
 
@@ -260,6 +272,78 @@ belongs above the text baseline.  The 3pt of page margins cancel out."
                         (cons (string-to-number (match-string 1))
                               (string-to-number (match-string 2)))
                         org-typst-preview--dims-cache))))))
+
+(defconst org-typst-preview--cache-file-regexp
+  "\\`\\([0-9a-f]+\\)-[12]\\.\\(?:svg\\|png\\)\\'"
+  "Names written by the current cache scheme: <hash>-1/-2.<ext>.
+Group 1 is the fragment's content hash; both pages share it.")
+
+(defvar org-typst-preview--pruned nil
+  "Non-nil once the image cache has been pruned this Emacs session.")
+
+;;;###autoload
+(defun org-typst-preview-prune-cache ()
+  "Trim the image cache: drop stale files, then enforce the size/age caps.
+Images left by older versions of this package (a different naming
+scheme) are always removed.  Then whole <hash> fragment groups are
+deleted, oldest first, until nothing is older than
+`org-typst-preview-cache-max-age-days' days and the total is under
+`org-typst-preview-cache-max-bytes'.  Deleted images recompile on
+demand, so pruning is safe at any time."
+  (interactive)
+  (when (file-directory-p org-typst-preview-cache-dir)
+    (let ((groups (make-hash-table :test #'equal)) ; hash -> (FILES SIZE MTIME)
+          (total 0))
+      (dolist (f (directory-files org-typst-preview-cache-dir t))
+        (let ((name (file-name-nondirectory f)))
+          (cond
+           ((not (file-regular-p f)) nil) ; . .. and any subdirectory
+           ((string-match org-typst-preview--cache-file-regexp name)
+            (let* ((hash (match-string 1 name))
+                   (attrs (file-attributes f))
+                   (size (or (file-attribute-size attrs) 0))
+                   (mtime (float-time (file-attribute-modification-time attrs)))
+                   (g (gethash hash groups)))
+              (setq total (+ total size))
+              (if g
+                  (setf (nth 0 g) (cons f (nth 0 g))
+                        (nth 1 g) (+ (nth 1 g) size)
+                        (nth 2 g) (max (nth 2 g) mtime))
+                (puthash hash (list (list f) size mtime) groups))))
+           ;; an image the current scheme would never write: a leftover
+           ;; from an older version.  (Non-image files, e.g. a compile's
+           ;; .typ, are left for the compiler to clean up.)
+           ((string-match-p "\\.\\(?:svg\\|png\\)\\'" name)
+            (ignore-errors (delete-file f))))))
+      (let ((glist nil)
+            (cutoff (and org-typst-preview-cache-max-age-days
+                         (- (float-time)
+                            (* 86400 org-typst-preview-cache-max-age-days)))))
+        (maphash (lambda (_ g) (push g glist)) groups)
+        (setq glist (sort glist (lambda (a b) (< (nth 2 a) (nth 2 b))))) ; oldest first
+        (dolist (g glist)
+          ;; delete a whole fragment when it is too old, or while the
+          ;; cache is still over its size cap (oldest fragments first)
+          (when (or (and cutoff (< (nth 2 g) cutoff))
+                    (and org-typst-preview-cache-max-bytes
+                         (> total org-typst-preview-cache-max-bytes)))
+            (dolist (file (nth 0 g)) (ignore-errors (delete-file file)))
+            (setq total (- total (nth 1 g)))))))))
+
+;;;###autoload
+(defun org-typst-preview-clear-cache ()
+  "Delete every cached math image, reclaiming all the disk they used.
+Also clears the in-memory dimension and failure tables, so fragments
+recompile fresh the next time they are shown."
+  (interactive)
+  (when (file-directory-p org-typst-preview-cache-dir)
+    (dolist (f (directory-files org-typst-preview-cache-dir t
+                                "\\.\\(?:svg\\|png\\|typ\\)\\'"))
+      (ignore-errors (delete-file f))))
+  (clrhash org-typst-preview--dims-cache)
+  (clrhash org-typst-preview--failed)
+  (when (called-interactively-p 'interactive)
+    (message "org-typst-preview: image cache cleared")))
 
 (defun org-typst-preview--protected-p (pos)
   "Non-nil if POS is somewhere math should not render (code blocks etc.)."
@@ -694,6 +778,10 @@ Moving the cursor into a rendered fragment reveals its source for editing."
   (if org-typst-preview-mode
       (progn
         (make-directory org-typst-preview-cache-dir t)
+        ;; garbage-collect the cache once per session, before rendering
+        (unless org-typst-preview--pruned
+          (setq org-typst-preview--pruned t)
+          (org-typst-preview-prune-cache))
         (add-hook 'post-command-hook #'org-typst-preview--post-command nil t)
         (add-hook 'text-scale-mode-hook #'org-typst-preview--refresh-images nil t)
         ;; Global on purpose: resize handling must outlive any one buffer,

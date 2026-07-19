@@ -170,6 +170,51 @@
     (check "point after -> rendered"
            (and (<= start (point)) (<= (point) end)) nil)))
 
+;; --- 5. cache pruning ------------------------------------------------------
+(cl-flet ((mk (dir name bytes age-days)
+            (let ((f (expand-file-name name dir)))
+              (with-temp-file f (insert (make-string bytes ?x)))
+              (when age-days
+                (set-file-times
+                 f (seconds-to-time (- (float-time) (* 86400 age-days)))))
+              f)))
+  ;; legacy orphans + stale fragments go; fresh pairs and .typ stay
+  (let* ((dir (file-name-as-directory (make-temp-file "otp-prune" t)))
+         (org-typst-preview-cache-dir dir)
+         (org-typst-preview-cache-max-bytes nil)
+         (org-typst-preview-cache-max-age-days 30))
+    (mk dir "feed-1-crop100.svg" 100 1)  ; old scheme -> always deleted
+    (mk dir "beef-1.svg" 100 1)          ; fresh pair -> kept
+    (mk dir "beef-2.svg" 100 1)
+    (mk dir "dead-1.svg" 100 40)         ; stale pair -> deleted by age
+    (mk dir "dead-2.svg" 100 40)
+    (mk dir "beef-1.svg.typ" 10 1)       ; not an image -> left alone
+    (org-typst-preview-prune-cache)
+    (check "prune: drop legacy + stale, keep fresh pair and .typ"
+           (sort (directory-files dir nil "[^.]") #'string<)
+           '("beef-1.svg" "beef-1.svg.typ" "beef-2.svg")))
+
+  ;; size cap drops whole fragments, oldest first, until under the limit
+  (let* ((dir (file-name-as-directory (make-temp-file "otp-size" t)))
+         (org-typst-preview-cache-dir dir)
+         (org-typst-preview-cache-max-age-days nil)
+         (org-typst-preview-cache-max-bytes 250))
+    (mk dir "aaaa-1.svg" 100 10) (mk dir "aaaa-2.svg" 100 10) ; older 200B
+    (mk dir "bbbb-1.svg" 100 1)  (mk dir "bbbb-2.svg" 100 1)  ; newer 200B
+    (org-typst-preview-prune-cache)     ; 400B > 250 -> drop oldest group
+    (check "prune: size cap evicts the oldest whole fragment"
+           (sort (directory-files dir nil "[^.]") #'string<)
+           '("bbbb-1.svg" "bbbb-2.svg")))
+
+  ;; clear-cache wipes images and their .typ scratch files
+  (let* ((dir (file-name-as-directory (make-temp-file "otp-clear" t)))
+         (org-typst-preview-cache-dir dir))
+    (mk dir "abcd-1.svg" 100 nil)
+    (mk dir "abcd-1.svg.typ" 10 nil)
+    (org-typst-preview-clear-cache)
+    (check "clear-cache empties the cache directory"
+           (directory-files dir nil "[^.]") nil)))
+
 (if (> test-failures 0)
     (kill-emacs 1)
   (message "\nAll tests passed."))
