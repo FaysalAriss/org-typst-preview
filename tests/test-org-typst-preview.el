@@ -43,6 +43,28 @@
              "$alpha$" "$beta/2$"
              "$$x$$" "$y$"))))
 
+;; --- 1b. multi-line display math ------------------------------------------
+(with-temp-buffer
+  (org-mode)
+  (insert "Aligned block:\n"
+          "$$\n  a = b + c \\\n    = d\n$$\n"
+          "and inline $x^2$ stays put.\n"
+          "Not math across lines: cost was $5\nand later $10 total.\n")
+  (let ((frags (org-typst-preview--fragments)))
+    ;; the multi-line $$...$$ is one fragment; the cross-line $...$ money
+    ;; pair is rejected because inline math must stay on a single line
+    (check "multi-line display math strings"
+           (mapcar (lambda (f) (nth 3 f)) frags)
+           '("\n  a = b + c \\\n    = d\n" "x^2"))
+    (check "multi-line display flags"
+           (mapcar (lambda (f) (nth 2 f)) frags)
+           '(t nil))
+    (check "multi-line fragment round-trip"
+           (mapcar (lambda (f)
+                     (buffer-substring-no-properties (nth 0 f) (nth 1 f)))
+                   frags)
+           '("$$\n  a = b + c \\\n    = d\n$$" "$x^2$"))))
+
 ;; --- 2. typst source generation -------------------------------------------
 (check "inline source"
        (org-typst-preview--source "x^2" nil 12 "#ffffff")

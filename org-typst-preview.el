@@ -3,7 +3,7 @@
 ;; Copyright (C) 2026 Faysal Ariss
 
 ;; Author: Faysal Ariss <faysal.ariss@gmail.com>
-;; Version: 0.7.0
+;; Version: 0.8.0
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: outlines, tex, wp
 ;; URL: https://github.com/faysalariss/org-typst-preview
@@ -26,8 +26,8 @@
 ;; Obsidian-style live math previews for Org mode, with Typst as the math
 ;; language instead of LaTeX:
 ;;
-;;     $x^2 + y^2 = z^2$                  inline math
-;;     $$sum_(k=1)^n k = (n(n+1))/2$$     display-style math (one line)
+;;     $x^2 + y^2 = z^2$                  inline math (one line)
+;;     $$sum_(k=1)^n k = (n(n+1))/2$$     display-style math (may span lines)
 ;;
 ;; A fragment turns into a rendered image the moment the cursor is no
 ;; longer inside the dollar signs, and turns back into editable text when
@@ -100,13 +100,22 @@ next to your text."
   :type '(choice (const :tag "Re-wrap at window width, like text" wrap)
                  (const :tag "Scale down to fit" scale)))
 
-;; A math fragment is $...$ or $$...$$ on a single line, whose content
-;; starts and ends with a non-space character -- the same rule Org and
-;; Obsidian use, so "I paid $5, then some more" is not mistaken for math.
-;; Two prices on one line ("$10 ... 100$") CAN still pair up, exactly as
-;; they would in Obsidian; write \$ to escape a literal dollar sign.
-(defconst org-typst-preview--regexp
-  "\\(\\$\\$?\\)\\([^$[:space:]]\\(?:[^$\n]*[^$[:space:]]\\)?\\)\\1")
+;; A math fragment's content has a non-space character at each end -- the
+;; same rule Org and Obsidian use, so "I paid $5, then some more" is not
+;; mistaken for math.  Two patterns keep the two delimiters honest:
+;; display `$$...$$' may span several lines and open on its own line (the
+;; leading/trailing `[:space:]*'), while inline `$...$' stays on a single
+;; line and hugs no whitespace, so text and prices never pair up across
+;; lines.  Neither content may contain a `$'.  Two prices on one line
+;; ("$10 ... 100$") CAN still pair up, exactly as in Obsidian; write \$
+;; to escape a literal dollar sign.
+(defconst org-typst-preview--display-regexp
+  "\\$\\$\\([[:space:]]*[^$[:space:]]\\(?:[^$]*[^$[:space:]]\\)?[[:space:]]*\\)\\$\\$"
+  "Matches $$...$$ display math, whose content may span several lines.")
+
+(defconst org-typst-preview--inline-regexp
+  "\\$\\([^$[:space:]]\\(?:[^$\n]*[^$[:space:]]\\)?\\)\\$"
+  "Matches single-line $...$ inline math.")
 
 (defvar org-typst-preview--inflight (make-hash-table :test #'equal)
   "Image files currently being compiled, to avoid duplicate typst runs.")
@@ -261,20 +270,41 @@ belongs above the text baseline.  The 3pt of page margins cancel out."
                '(src-block example-block export-block comment-block
                  comment keyword fixed-width latex-environment)))))
 
+(defun org-typst-preview--in-region-p (start end regions)
+  "Non-nil if START..END overlaps any (BEG . FIN) cons in REGIONS."
+  (catch 'hit
+    (dolist (r regions)
+      (when (and (< start (cdr r)) (> end (car r)))
+        (throw 'hit t)))))
+
 (defun org-typst-preview--fragments ()
-  "Return a list of (START END DISPLAYP MATH) for fragments in the buffer."
-  (let (frags)
+  "Return a list of (START END DISPLAYP MATH) for fragments in the buffer.
+Inline `$...$' math stays on one line and hugs no whitespace; display
+`$$...$$' math may span several lines and open on its own line.  The
+list is ordered by buffer position."
+  (let (display frags)
     (save-excursion
+      ;; 1. display math first: $$...$$ may span lines.  Every match's
+      ;; span is recorded so the inline pass does not dive into it and
+      ;; mistake the inner text for a second, single-dollar fragment.
       (goto-char (point-min))
-      (while (re-search-forward org-typst-preview--regexp nil t)
+      (while (re-search-forward org-typst-preview--display-regexp nil t)
         (let ((start (match-beginning 0))
-              (end (match-end 0))
-              (displayp (= (length (match-string 1)) 2))
-              (math (match-string-no-properties 2)))
+              (end (match-end 0)))
           (unless (or (eq (char-before start) ?\\) ; \$ escapes a dollar sign
                       (save-match-data (org-typst-preview--protected-p start)))
-            (push (list start end displayp math) frags)))))
-    (nreverse frags)))
+            (push (list start end t (match-string-no-properties 1)) frags))
+          (push (cons start end) display)))
+      ;; 2. inline math: single-line $...$ outside every display span.
+      (goto-char (point-min))
+      (while (re-search-forward org-typst-preview--inline-regexp nil t)
+        (let ((start (match-beginning 0))
+              (end (match-end 0)))
+          (unless (or (eq (char-before start) ?\\)
+                      (org-typst-preview--in-region-p start end display)
+                      (save-match-data (org-typst-preview--protected-p start)))
+            (push (list start end nil (match-string-no-properties 1)) frags)))))
+    (sort frags (lambda (a b) (< (car a) (car b))))))
 
 (defun org-typst-preview--on-modify (ov &rest _)
   "Delete overlay OV, revealing the source text, as soon as it is edited."
@@ -338,62 +368,70 @@ is only a safety net)."
                      (org-typst-preview--text-scale))
            props)))
 
-(defun org-typst-preview--overlay (start end img-file hash)
-  "Cover START..END with the image in IMG-FILE, tagged with HASH."
-  (let ((ov (make-overlay start end))
-        (mw (org-typst-preview--max-width (current-buffer))))
+(defun org-typst-preview--make-overlay (start end hash)
+  "Make a preview overlay over START..END, tagged HASH.
+Sets the tag, hash and the edit hooks that make the overlay evaporate
+\(revealing the source text) the moment the fragment is touched.  The
+caller adds whatever it displays -- an image, or an error underline."
+  (let ((ov (make-overlay start end)))
     (overlay-put ov 'org-typst-preview t)
     (overlay-put ov 'org-typst-preview-hash hash)
-    (overlay-put ov 'org-typst-preview-file img-file)
-    (overlay-put ov 'org-typst-preview-max mw)
-    (overlay-put ov 'display (org-typst-preview--image img-file mw))
     (overlay-put ov 'evaporate t)
     (overlay-put ov 'modification-hooks '(org-typst-preview--on-modify))
     (overlay-put ov 'insert-in-front-hooks '(org-typst-preview--on-modify))
     (overlay-put ov 'insert-behind-hooks '(org-typst-preview--on-modify))
     ov))
 
+(defun org-typst-preview--overlay (start end img-file hash)
+  "Cover START..END with the image in IMG-FILE, tagged with HASH."
+  (let ((ov (org-typst-preview--make-overlay start end hash))
+        (mw (org-typst-preview--max-width (current-buffer))))
+    (overlay-put ov 'org-typst-preview-file img-file)
+    (overlay-put ov 'org-typst-preview-max mw)
+    (overlay-put ov 'display (org-typst-preview--image img-file mw))
+    ov))
+
+(defun org-typst-preview--reflow-overlays (cap force-rebuild)
+  "Reconcile every preview overlay in the current buffer with width CAP.
+In `wrap' style, overlays now wider than CAP are removed -- their raw
+text reappears at the normal, constant font size, to be re-wrapped by
+the next scheduled scan.  Otherwise each overlay's width cap is set to
+CAP and its image spec rebuilt: in `scale' style whenever the cap
+changed, and always when FORCE-REBUILD is non-nil (e.g. after a zoom,
+when the on-screen pixel size changed even though the cap did not).
+No style leaves an image wider than its window unwittingly, which would
+risk an Emacs redisplay hang -- see `org-typst-preview--max-width'."
+  (let ((wrapp (eq org-typst-preview-overflow-style 'wrap))
+        (scale (org-typst-preview--display-scale)))
+    (dolist (ov (overlays-in (point-min) (point-max)))
+      (let ((file (and (overlay-get ov 'org-typst-preview)
+                       (overlay-get ov 'org-typst-preview-file))))
+        (when file
+          (let ((dims (org-typst-preview--image-dims file)))
+            (cond
+             ((and wrapp cap dims (> (* (car dims) scale) cap))
+              (delete-overlay ov))
+             ((if wrapp
+                  force-rebuild
+                (or force-rebuild
+                    (not (eql cap (overlay-get ov 'org-typst-preview-max)))))
+              (overlay-put ov 'org-typst-preview-max cap)
+              (overlay-put ov 'display
+                           (org-typst-preview--image file cap)))))))))
+  (org-typst-preview--schedule))
+
 (defun org-typst-preview--window-resize (frame)
   "Adjust previews in FRAME's windows after a size change, per style.
 `wrap': previews too wide for their window are removed -- the raw text
 shows at the normal, constant font size until the re-wrapped image
 arrives via the scheduled scan.  `scale': every preview's width cap is
-refreshed so it shrinks or grows with the window.  In no style is an
-image left wider than its window unwittingly, which would risk an Emacs
-redisplay hang -- see `org-typst-preview--max-width'."
+refreshed so it shrinks or grows with the window."
   (dolist (win (window-list frame 'nomini))
     (let ((buf (window-buffer win)))
       (when (buffer-local-value 'org-typst-preview-mode buf)
         (with-current-buffer buf
-          (pcase org-typst-preview-overflow-style
-            ('wrap
-             (let ((avail (org-typst-preview--max-width buf))
-                   (scale (org-typst-preview--display-scale)))
-               (when avail
-                 (dolist (ov (overlays-in (point-min) (point-max)))
-                   (let* ((file (and (overlay-get ov 'org-typst-preview)
-                                     (overlay-get ov 'org-typst-preview-file)))
-                          (dims (and file
-                                     (org-typst-preview--image-dims file))))
-                     (when (and dims (> (* (car dims) scale) avail))
-                       (delete-overlay ov)))))
-               ;; re-flow wrapped math to the new width once resizing pauses
-               (org-typst-preview--schedule)))
-            ;; scale: refresh the :max-width caps so images shrink/grow
-            ;; with the window.
-            ('scale
-             (let ((cap (org-typst-preview--max-width buf)))
-               (when cap
-                 (dolist (ov (overlays-in (point-min) (point-max)))
-                   (when (and (overlay-get ov 'org-typst-preview)
-                              (overlay-get ov 'org-typst-preview-file)
-                              (not (eql cap (overlay-get
-                                             ov 'org-typst-preview-max))))
-                     (overlay-put ov 'org-typst-preview-max cap)
-                     (overlay-put ov 'display
-                                  (org-typst-preview--image
-                                   (overlay-get ov 'org-typst-preview-file)
-                                   cap)))))))))))))
+          (org-typst-preview--reflow-overlays
+           (org-typst-preview--max-width buf) nil))))))
 
 (defun org-typst-preview--existing-with-hash (start end hash)
   "Non-nil if a preview with HASH already covers exactly START..END."
@@ -422,9 +460,7 @@ is edited."
     (dolist (ov (overlays-in start end))
       (when (overlay-get ov 'org-typst-preview)
         (delete-overlay ov)))
-    (let ((ov (make-overlay start end)))
-      (overlay-put ov 'org-typst-preview t)
-      (overlay-put ov 'org-typst-preview-hash hash)
+    (let ((ov (org-typst-preview--make-overlay start end hash)))
       (overlay-put ov 'face 'org-typst-preview-error)
       (when message
         (overlay-put ov 'after-string
@@ -432,10 +468,6 @@ is edited."
                                  'face 'org-typst-preview-error-message)))
       (overlay-put ov 'help-echo
                    "Full Typst output: buffer *org-typst-preview-errors*")
-      (overlay-put ov 'evaporate t)
-      (overlay-put ov 'modification-hooks '(org-typst-preview--on-modify))
-      (overlay-put ov 'insert-in-front-hooks '(org-typst-preview--on-modify))
-      (overlay-put ov 'insert-behind-hooks '(org-typst-preview--on-modify))
       ov)))
 
 (defcustom org-typst-preview-max-processes 4
@@ -630,20 +662,9 @@ as elsewhere."
 Runs after \\[text-scale-adjust] so previews zoom along with the text.
 In `wrap' style, previews that no longer fit their window at the new
 zoom are removed (revealing the raw text) and re-wrapped by the
-scheduled scan; the other styles just re-cap or leave them be."
-  (let ((cap (org-typst-preview--max-width (current-buffer)))
-        (wrapp (eq org-typst-preview-overflow-style 'wrap))
-        (scale (org-typst-preview--display-scale)))
-    (dolist (ov (overlays-in (point-min) (point-max)))
-      (when (and (overlay-get ov 'org-typst-preview)
-                 (overlay-get ov 'org-typst-preview-file))
-        (let* ((file (overlay-get ov 'org-typst-preview-file))
-               (dims (org-typst-preview--image-dims file)))
-          (if (and wrapp cap dims (> (* (car dims) scale) cap))
-              (delete-overlay ov)
-            (overlay-put ov 'org-typst-preview-max cap)
-            (overlay-put ov 'display (org-typst-preview--image file cap))))))
-    (org-typst-preview--schedule)))
+scheduled scan; the others are re-capped and re-scaled to the new zoom."
+  (org-typst-preview--reflow-overlays
+   (org-typst-preview--max-width (current-buffer)) t))
 
 (defun org-typst-preview--schedule ()
   "Debounce a re-scan of the current buffer onto an idle timer."
@@ -666,9 +687,9 @@ scheduled scan; the other styles just re-cap or leave them be."
 ;;;###autoload
 (define-minor-mode org-typst-preview-mode
   "Render $...$ fragments as Typst images when the cursor is elsewhere.
-Inline math uses single dollars ($x^2$), display-style math uses double
-dollars ($$sum_(k=1)^n k$$), both on a single line.  Moving the cursor
-into a rendered fragment reveals its source for editing."
+Inline math uses single dollars ($x^2$) and stays on one line; display
+math uses double dollars ($$sum_(k=1)^n k$$) and may span several lines.
+Moving the cursor into a rendered fragment reveals its source for editing."
   :lighter " Typ$"
   (if org-typst-preview-mode
       (progn
