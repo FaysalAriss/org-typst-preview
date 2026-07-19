@@ -1,12 +1,25 @@
 # org-typst-preview
 
-Live math previews for Emacs Org mode, written in
-[Typst](https://typst.app) instead of LaTeX.
+Live math previews for Emacs Org mode, for [Typst](https://typst.app) instead of LaTeX.
 
----
+## Demo
+
 <p align="center">
   <img src="docs/demo.png" alt="org-typst-preview live demo" width="720">
 </p>
+
+```
+We can easily write some inline math $a^2 + b^2 = c^2$
+It's no problem if it gets large $5^2^2^2 + 5/(2/2/2/2)$, it will account for it's size
+So we can still write under it!
+Maybe we have a really long equation $sum_(i=1)^20 = 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10 + 11 + 12 + 13 + 14 + 15 +16 + 17 + 18 + 19 + 20$ it will just wrap
+Maybe we want some multiline, so we use double dollar signs
+$$
+y &= (x+5)^2 \
+&= x^2 + 10x + 25
+$$
+Errors are easy to notice:  $foral x in ZZ$
+```
 
 ## Features
 
