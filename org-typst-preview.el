@@ -213,11 +213,13 @@ sits -- used to align the image with the surrounding text's baseline
   ;; top/bottom-edge "bounds" makes the auto-sized page measure the real
   ;; ink extents; the default (cap-height..baseline) crops descenders
   ;; like the tail of y and anything raised above cap height (exponents).
-  ;; Wrapped display math becomes inline-mode `$display(...)$': block
-  ;; equations never line-break (they just clip at the page edge), but
-  ;; inline-mode math flows across lines while display(...) keeps the
-  ;; large operator glyphs, so the font size stays constant.
-  (let ((body (cond ((and displayp wrap-w) (format "$display(%s)$" math))
+  ;; Wrapped display math becomes `#math.display($...$)': block equations
+  ;; never line-break (they just clip at the page edge), but an inline
+  ;; equation flows across lines while math.display keeps the large
+  ;; operator glyphs, so the font size stays constant.  The equation is
+  ;; passed as one content argument (not `$display(...)$', whose body a
+  ;; top-level comma would split into stray function arguments).
+  (let ((body (cond ((and displayp wrap-w) (format "#math.display($%s$)" math))
                     (displayp (format "$ %s $" math))
                     (t (format "$%s$" math)))))
     (concat (if wrap-w
@@ -342,6 +344,17 @@ recompile fresh the next time they are shown."
       (ignore-errors (delete-file f))))
   (clrhash org-typst-preview--dims-cache)
   (clrhash org-typst-preview--failed)
+  ;; Drop overlays still displaying the just-deleted images and re-render
+  ;; from scratch.  A left-behind overlay keeps showing its old image from
+  ;; Emacs's own image cache; because its file (and cached dimensions) are
+  ;; now gone, a later re-wrap cannot tell it no longer fits the window and
+  ;; may leave it too wide -- which wedges redisplay under `visual-line-mode'
+  ;; plus `display-line-numbers-mode' (see `org-typst-preview--max-width').
+  (dolist (buf (buffer-list))
+    (when (buffer-local-value 'org-typst-preview-mode buf)
+      (with-current-buffer buf
+        (remove-overlays (point-min) (point-max) 'org-typst-preview t)
+        (org-typst-preview--schedule))))
   (when (called-interactively-p 'interactive)
     (message "org-typst-preview: image cache cleared")))
 

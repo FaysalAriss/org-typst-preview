@@ -79,9 +79,15 @@
        (string-prefix-p "#set page(width: 250pt,"
                         (org-typst-preview--source "x^2" nil 12 "#ffffff" 250))
        t)
-(check "wrapped display source uses inline display() so it can break"
-       (string-suffix-p "$display(x^2)$"
+(check "wrapped display source uses math.display so it can break"
+       (string-suffix-p "#math.display($x^2$)"
                         (org-typst-preview--source "x^2" t 12 "#ffffff" 250))
+       t)
+;; a top-level comma must stay inside the equation, not split display()'s
+;; arguments (regression: multiline systems like "a = 1, b = 2" errored)
+(check "wrapped display source keeps a comma inside the equation"
+       (string-suffix-p "#math.display($a = 1, b = 2$)"
+                        (org-typst-preview--source "a = 1, b = 2" t 12 "#ffffff" 250))
        t)
 
 ;; --- 3. real compilation through the async path ---------------------------
