@@ -198,6 +198,15 @@ Falls back to matching the em when glyph metrics are unavailable."
                 (ash (nth 0 vals) -8) (ash (nth 1 vals) -8) (ash (nth 2 vals) -8))
       "#000000")))
 
+(defconst org-typst-preview--baseline-drop 1000
+  "Height in pt of the invisible marker that measures the math baseline.
+On page 2 a marker whose top sits on the line baseline hangs this many
+pt below it; the page's ink then bottoms out at the marker, so page-2
+height minus this value gives the ink above the baseline.  It must
+exceed any fragment's descent below the baseline -- 1000pt is safe at
+any font size -- and it is subtracted back out in
+`org-typst-preview--ascent'.")
+
 (defun org-typst-preview--source (math displayp size-pt color &optional wrap-w)
   "Build the Typst document that renders MATH at SIZE-PT in COLOR.
 When DISPLAYP is non-nil, use display-style math.  When WRAP-W is
@@ -205,10 +214,10 @@ non-nil, fix the page width to WRAP-W pt so Typst line-wraps long
 inline math instead of producing one wide line.
 
 The document has TWO pages: page 1 is the image shown in the buffer;
-page 2 renders the same math with the text box ending at the baseline
-instead of the ink bounds, so its height reveals where the baseline
-sits -- used to align the image with the surrounding text's baseline
-\(the same idea as dvipng's depth output in org-latex-preview)."
+page 2 renders the same math followed by a marker that hangs from the
+line baseline, so page 2's height locates the baseline -- used to sit
+the image on the surrounding text's baseline (the same idea as dvipng's
+depth output in org-latex-preview)."
   ;; fill: none = transparent background, so it sits on the theme's bg.
   ;; top/bottom-edge "bounds" makes the auto-sized page measure the real
   ;; ink extents; the default (cap-height..baseline) crops descenders
@@ -219,6 +228,14 @@ sits -- used to align the image with the surrounding text's baseline
   ;; operator glyphs, so the font size stays constant.  The equation is
   ;; passed as one content argument (not `$display(...)$', whose body a
   ;; top-level comma would split into stray function arguments).
+  ;;
+  ;; The page-2 marker is a box shifted so its TOP rests on the line
+  ;; baseline, hanging `--baseline-drop' pt below it; a leading #h(-1pt)
+  ;; cancels its width so it never adds a wrapped line.  We cannot ask
+  ;; Typst for the baseline directly: `bottom-edge: "baseline"' reports
+  ;; the baseline of the LOWEST internal line, which for stacked math
+  ;; (deep fractions, matrices, cases) sits far below the inline baseline
+  ;; the equation actually aligns on -- placing such math much too high.
   (let ((body (cond ((and displayp wrap-w) (format "#math.display($%s$)" math))
                     (displayp (format "$ %s $" math))
                     (t (format "$%s$" math)))))
@@ -229,8 +246,11 @@ sits -- used to align the image with the surrounding text's baseline
             (format "#set text(size: %spt, fill: rgb(\"%s\"), top-edge: \"bounds\", bottom-edge: \"bounds\")\n"
                     size-pt color)
             body
-            "\n#pagebreak()\n#set text(bottom-edge: \"baseline\")\n"
-            body)))
+            "\n#pagebreak()\n"
+            body
+            (format "#h(-1pt)#box(baseline: %dpt, width: 1pt, height: %dpt, fill: black)"
+                    org-typst-preview--baseline-drop
+                    org-typst-preview--baseline-drop))))
 
 (defun org-typst-preview--target (math displayp size color wrap-w)
   "Return (SOURCE HASH IMG-FILE) for rendering MATH.
@@ -246,15 +266,18 @@ DISPLAYP, SIZE, COLOR and WRAP-W as in `org-typst-preview--source'."
 
 (defun org-typst-preview--ascent (img-file)
   "Baseline ascent percentage for IMG-FILE, or nil to center instead.
-Compares the full-ink height (page 1) with the height down to the
-baseline (page 2); the ratio tells Emacs what fraction of the image
-belongs above the text baseline.  The 3pt of page margins cancel out."
+Page 1 gives the full ink height; page 2 is the same math plus the
+baseline marker, so its height is the ink above the baseline plus
+`org-typst-preview--baseline-drop'.  Subtracting the marker leaves the
+ascent, and the ratio to the full height is the fraction of the image
+above the text baseline.  The 3pt of page margins cancel out."
   (when (string-suffix-p "-1.svg" img-file)
     (let* ((d1 (org-typst-preview--image-dims img-file))
            (d2 (org-typst-preview--image-dims
                 (concat (substring img-file 0 -6) "-2.svg"))))
       (when (and d1 d2 (> (cdr d1) 3.0))
-        (min 100 (max 10 (round (* 100 (/ (- (cdr d2) 3.0)
+        (min 100 (max 10 (round (* 100 (/ (- (cdr d2) 3.0
+                                             org-typst-preview--baseline-drop)
                                           (- (cdr d1) 3.0))))))))))
 
 (defvar org-typst-preview--dims-cache (make-hash-table :test #'equal)

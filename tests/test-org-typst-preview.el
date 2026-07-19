@@ -70,24 +70,35 @@
        (org-typst-preview--source "x^2" nil 12 "#ffffff")
        (concat "#set page(width: auto, height: auto, margin: 1.5pt, fill: none)\n"
                "#set text(size: 12pt, fill: rgb(\"#ffffff\"), top-edge: \"bounds\", bottom-edge: \"bounds\")\n"
-               "$x^2$\n#pagebreak()\n#set text(bottom-edge: \"baseline\")\n$x^2$"))
+               "$x^2$\n#pagebreak()\n$x^2$"
+               (format "#h(-1pt)#box(baseline: %dpt, width: 1pt, height: %dpt, fill: black)"
+                       org-typst-preview--baseline-drop
+                       org-typst-preview--baseline-drop)))
 (check "display source uses spaced dollars"
-       (string-suffix-p "$ x^2 $"
-                        (org-typst-preview--source "x^2" t 12 "#ffffff"))
+       (and (string-match-p "\\$ x\\^2 \\$"
+                            (org-typst-preview--source "x^2" t 12 "#ffffff"))
+            t)
+       t)
+(check "baseline marker present on page 2"
+       (and (string-match-p "#box(baseline:"
+                            (org-typst-preview--source "x^2" nil 12 "#ffffff"))
+            t)
        t)
 (check "wrapped source fixes the page width"
        (string-prefix-p "#set page(width: 250pt,"
                         (org-typst-preview--source "x^2" nil 12 "#ffffff" 250))
        t)
 (check "wrapped display source uses math.display so it can break"
-       (string-suffix-p "#math.display($x^2$)"
-                        (org-typst-preview--source "x^2" t 12 "#ffffff" 250))
+       (and (string-match-p "#math.display(\\$x\\^2\\$)"
+                            (org-typst-preview--source "x^2" t 12 "#ffffff" 250))
+            t)
        t)
 ;; a top-level comma must stay inside the equation, not split display()'s
 ;; arguments (regression: multiline systems like "a = 1, b = 2" errored)
 (check "wrapped display source keeps a comma inside the equation"
-       (string-suffix-p "#math.display($a = 1, b = 2$)"
-                        (org-typst-preview--source "a = 1, b = 2" t 12 "#ffffff" 250))
+       (and (string-match-p "#math.display(\\$a = 1, b = 2\\$)"
+                            (org-typst-preview--source "a = 1, b = 2" t 12 "#ffffff" 250))
+            t)
        t)
 
 ;; --- 3. real compilation through the async path ---------------------------
