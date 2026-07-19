@@ -153,41 +153,17 @@ a new hash, which retries automatically.")
   "Image format to render: SVG when Emacs can show it, else PNG."
   (if (image-type-available-p 'svg) 'svg 'png))
 
-(defconst org-typst-preview--math-x-ratio 0.453
-  "Ink height of a lowercase math letter per pt of Typst text size.
-Measured: `$x$' at 100pt has 45.3pt of glyph ink with Typst's default
-math font (New Computer Modern Math).  A unit test recompiles this so
-a Typst upgrade that changes the default font is caught.")
-
-(defvar org-typst-preview--font-pt-cache nil
-  "Cons (FONT-NAME . SIZE-PT) memoizing the font calibration.")
-
 (defun org-typst-preview--font-pt ()
-  "Typst text size (pt) whose glyphs optically match the buffer font.
-Chosen so a lowercase letter has the same ink height in both fonts
-\(x-height matching, the idea behind CSS font-size-adjust): the buffer
-font's `x' ink height in pixels divided by Typst's per-pt math ink.
-SVG pt render 1:1 with logical pixels (measured), so px and pt align.
-Falls back to matching the em when glyph metrics are unavailable."
-  (let ((sig (ignore-errors (face-font 'default))))
-    (if (and sig (equal sig (car org-typst-preview--font-pt-cache)))
-        (cdr org-typst-preview--font-pt-cache)
-      (let* ((ink (ignore-errors
-                    (let* ((font (font-at 0 nil "x"))
-                           (g (and font (font-get-glyphs font 0 1 "x"))))
-                      (and g (> (length g) 0)
-                           ;; glyph vector: ...[7]=ascent [8]=descent
-                           (+ (aref (aref g 0) 7) (aref (aref g 0) 8))))))
-             (size (if (and (numberp ink) (> ink 0))
-                       (/ ink org-typst-preview--math-x-ratio)
-                     (or (ignore-errors
-                           (let ((px (aref (font-info (face-font 'default)) 2)))
-                             (and (numberp px) (> px 0) px)))
-                         (let ((h (face-attribute 'default :height)))
-                           (if (integerp h) (/ h 10.0) 12))))))
-        (when sig
-          (setq org-typst-preview--font-pt-cache (cons sig size)))
-        size))))
+  "Typst text size (pt) matching the buffer font's size.
+Typst renders 1pt as 1 logical pixel (measured), so the buffer font's
+pixel size is used directly; nudge `org-typst-preview-scale' if the math
+reads a little large or small next to your text.  Falls back to the face
+height in points when the pixel size is unavailable."
+  (or (ignore-errors
+        (let ((px (aref (font-info (face-font 'default)) 2)))
+          (and (numberp px) (> px 0) px)))
+      (let ((h (face-attribute 'default :height)))
+        (if (integerp h) (/ h 10.0) 12))))
 
 (defun org-typst-preview--color-hex ()
   "Buffer foreground colour as a #rrggbb string (follows your theme)."

@@ -29,12 +29,8 @@ Live math previews for Emacs Org mode, written in
   compiles, or if the math has no legal break point, the fragment shows
   as plain text. (An alternative `scale` mode shrinks the image instead —
   see [Overflow styles](#overflow-styles).)
-- **Optically size-matched** — the math size is calibrated at runtime by
-  measuring your font's actual glyphs, so a `c` in math has the same ink
-  height as a `c` in your text (x-height matching, the idea behind CSS
-  `font-size-adjust`).
 - **Theme- and zoom-aware** — glyphs use your theme's foreground colour
-  on a transparent background, sized to match your font, and previews
+  on a transparent background, rendered at your font's size, and previews
   follow `text-scale-adjust` (`C-x C-+`) zooming.
 - **Forgiving** — broken math stays as plain text with a red wavy
   underline and Typst's own message inline right after it (e.g.
@@ -86,6 +82,16 @@ or with `use-package`:
 | `org-typst-preview-cache-dir`        | `~/.emacs.d/org-typst-preview-cache` | image cache (safe to delete) |
 | `org-typst-preview-cache-max-bytes`  | `50000000` | soft cap on cache size in bytes (`nil` disables)              |
 | `org-typst-preview-cache-max-age-days` | `30`    | delete images untouched this many days (`nil` disables)        |
+
+#### Size
+
+Math is rendered at your buffer font's size. If it reads a little larger
+or smaller than your text, nudge the scale (values below `1.0` shrink it,
+above `1.0` enlarge it):
+
+```elisp
+(setq org-typst-preview-scale 0.94)   ; a good starting point if math looks large
+```
 
 #### Overflow styles
 
@@ -150,9 +156,9 @@ Suggested keybindings:
   An image is never displayed wider than its window, which also avoids an
   Emacs redisplay hang that occurs when an image overflows the window
   while `visual-line-mode` and `display-line-numbers-mode` are both on.
-- If the calibrated math size still reads bigger or smaller than your
-  text, adjust `org-typst-preview-scale` (it multiplies the calibrated
-  size).
+- Math is rendered at your buffer font's size; if it reads a little
+  bigger or smaller than your text, nudge `org-typst-preview-scale` (it
+  multiplies the rendered size).
 
 ## Prior art
 
