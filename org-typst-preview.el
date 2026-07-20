@@ -3,6 +3,7 @@
 ;; Copyright (C) 2026 Faysal Ariss
 
 ;; Author: Faysal Ariss <faysal.ariss@gmail.com>
+;; Assisted-by: Claude Code:claude-opus-4-8
 ;; Version: 0.8.0
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: outlines, tex, wp
