@@ -6,7 +6,7 @@
 ;; Version: 0.8.0
 ;; Package-Requires: ((emacs "27.1"))
 ;; Keywords: outlines, tex, wp
-;; URL: https://github.com/faysalariss/org-typst-preview
+;; URL: https://github.com/FaysalAriss/org-typst-preview
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
