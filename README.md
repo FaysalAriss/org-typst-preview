@@ -1,6 +1,10 @@
+<div align="center">
+  
 # org-typst-preview
 
-Live math previews for Emacs Org mode, for [Typst](https://typst.app) instead of LaTeX.
+</div>
+
+Live inline math previews for Emacs Org mode, for [Typst](https://typst.app) instead of LaTeX. So you can take notes right in the buffer with simple syntax. 
 
 ## Demo
 
@@ -63,15 +67,14 @@ Errors are easy to notice:  $foral x in ZZ$
 
 ### Installation
 
-Not on MELPA yet — install manually. Put `org-typst-preview.el` somewhere
-on your `load-path`, then:
+Not on MELPA yet, install manually. 
 
-```elisp
-(require 'org-typst-preview)
-(add-hook 'org-mode-hook #'org-typst-preview-mode)
+Put [org-typst-preview.el ⬇](https://raw.githubusercontent.com/FaysalAriss/org-typst-preview/refs/heads/main/org-typst-preview.el) somewhere on your `load-path`:
+``` bash
+curl --output-dir ~/.emacs.d -O https://raw.githubusercontent.com/FaysalAriss/org-typst-preview/refs/heads/main/org-typst-preview.el
 ```
 
-or with `use-package`:
+Then:
 
 ```elisp
 (use-package org-typst-preview
@@ -79,6 +82,16 @@ or with `use-package`:
   :load-path "path/to/org-typst-preview"
   :hook (org-mode . org-typst-preview-mode))
 ```
+or:
+
+```elisp
+(require 'org-typst-preview)
+(add-hook 'org-mode-hook #'org-typst-preview-mode)
+```
+
+
+
+
 
 ### Customization
 
