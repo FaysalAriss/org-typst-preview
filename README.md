@@ -69,7 +69,7 @@ Errors are easy to notice:  $foral x in ZZ$
 
 Not on MELPA yet, install manually. 
 
-Put [org-typst-preview.el ⬇](https://raw.githubusercontent.com/FaysalAriss/org-typst-preview/refs/heads/main/org-typst-preview.el) somewhere on your `load-path`:
+Put [org-typst-preview.el ⬇](https://github.com/FaysalAriss/org-typst-preview/releases/download/v0.8.0/org-typst-preview.el) somewhere on your `load-path`:
 ``` bash
 curl --output-dir ~/.emacs.d -O https://raw.githubusercontent.com/FaysalAriss/org-typst-preview/refs/heads/main/org-typst-preview.el
 ```
